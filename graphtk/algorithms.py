@@ -142,6 +142,10 @@ def components(graph: Graph) -> list[list[str]]:
 
 def _as_undirected(graph: Graph) -> Graph:
     mirror = Graph(directed=False)
+    # Nodes first: a node with no incident edge (added bare, or left behind by remove_edge) must
+    # still appear as its own component -- rebuilding from edges alone would silently drop it.
+    for node in graph.nodes():
+        mirror.add_node(node)
     for edge in graph.edges():
         mirror.add_edge(edge.source, edge.target, edge.weight)
     return mirror

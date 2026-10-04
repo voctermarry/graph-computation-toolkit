@@ -147,6 +147,79 @@ class StructureTests(unittest.TestCase):
         graph.add_edge("b", "a")
         self.assertEqual(components(graph), [["a", "b"]])
 
+    def test_directed_components_cover_isolated_nodes(self) -> None:
+        # Nodes added through add_node carry no edge; they must still each form a component.
+        graph = Graph(directed=True)
+        for node in ("z", "m", "q"):
+            graph.add_node(node)
+        self.assertEqual(components(graph), [["m"], ["q"], ["z"]])
+
+    def test_directed_components_mix_edges_and_isolated_nodes(self) -> None:
+        graph = Graph(directed=True)
+        graph.add_edge("b", "a")
+        graph.add_edge("c", "b")
+        graph.add_node("z")
+        graph.add_node("y")
+        self.assertEqual(components(graph), [["a", "b", "c"], ["y"], ["z"]])
+        # The union of the components is exactly the node set, each node exactly once.
+        flat = [node for group in components(graph) for node in group]
+        self.assertEqual(sorted(flat), graph.nodes())
+
+    def test_directed_components_keep_nodes_orphaned_by_remove_edge(self) -> None:
+        graph = Graph(directed=True)
+        graph.add_edge("a", "b")
+        graph.add_edge("c", "d")
+        self.assertTrue(graph.remove_edge("c", "d"))
+        self.assertEqual(components(graph), [["a", "b"], ["c"], ["d"]])
+
+    def test_directed_components_self_loop_adds_no_extra_group(self) -> None:
+        graph = Graph(directed=True)
+        graph.add_edge("a", "b")
+        graph.add_edge("s", "s")
+        graph.add_node("z")
+        self.assertEqual(components(graph), [["a", "b"], ["s"], ["z"]])
+
+    def test_directed_components_do_not_depend_on_insertion_order(self) -> None:
+        def build(order: list[tuple[str, object, object]]) -> Graph:
+            graph = Graph(directed=True)
+            for kind, left, right in order:
+                if kind == "node":
+                    graph.add_node(str(left))
+                else:
+                    graph.add_edge(str(left), str(right))
+            return graph
+
+        operations = [
+            ("edge", "b", "a"),
+            ("node", "z", None),
+            ("edge", "c", "b"),
+            ("node", "y", None),
+            ("edge", "s", "s"),
+        ]
+        reference = components(build(operations))
+        self.assertEqual(reference, [["a", "b", "c"], ["s"], ["y"], ["z"]])
+        for permuted in (list(reversed(operations)), [operations[i] for i in (3, 0, 4, 1, 2)]):
+            self.assertEqual(components(build(permuted)), reference)
+
+    def test_components_leave_the_input_graph_untouched(self) -> None:
+        graph = Graph(directed=True)
+        graph.add_edge("b", "a", 2.5)
+        graph.add_node("z")
+        before = (graph.directed, graph.nodes(), [edge.to_document() for edge in graph.edges()])
+        components(graph)
+        after = (graph.directed, graph.nodes(), [edge.to_document() for edge in graph.edges()])
+        self.assertEqual(before, after)
+
+    def test_empty_graph_has_no_components(self) -> None:
+        self.assertEqual(components(Graph()), [])
+        self.assertEqual(components(Graph(directed=True)), [])
+
+    def test_undirected_components_unchanged_by_the_fix(self) -> None:
+        graph = Graph()
+        graph.add_edge("a", "b")
+        graph.add_node("z")
+        self.assertEqual(components(graph), [["a", "b"], ["z"]])
+
     def test_topological_sort_respects_edges(self) -> None:
         graph = Graph(directed=True)
         for source, target in (("a", "b"), ("a", "c"), ("b", "d"), ("c", "d")):

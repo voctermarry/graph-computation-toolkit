@@ -37,6 +37,7 @@ Graphs are **undirected unless `--directed` is passed**.
 | `stats` | nodes, edges, self-loops, negative weights, component count | 0 / **3** (empty) |
 | `bfs --source S` | hop distances plus a depth-first pre-order | 0 / **3** / 2 |
 | `dijkstra --source S [--target T]` | non-negative shortest paths; `--target` adds `path` | 0 / **3** / 2 |
+| `astar --source S --target T --heuristic FILE` | goal-directed shortest path guided by a consistent heuristic JSON object | 0 / 2 |
 | `bellman-ford --source S [--target T]` | shortest paths with negative weights | 0 / **3** / 2 |
 | `components` | weakly connected components, each sorted | 0 / **3** / 2 |
 | `toposort` | topological order (**requires `--directed`**) | 0 / 2 |
@@ -45,7 +46,11 @@ Graphs are **undirected unless `--directed` is passed**.
 | `clustering` | local clustering coefficients, average, transitivity, triangle and wedge counts | 0 / **3** (empty) / 2 |
 | `compare --source S` | run Dijkstra **and** Bellman-Ford and check they agree | 0 / **3** (disagree) / 2 |
 
-`--edges -` reads from stdin.
+`--edges -` reads from stdin. The `astar` heuristic file is a UTF-8 JSON object mapping node names
+to estimated remaining cost; nodes missing from it estimate to `0`, the target must estimate to `0`,
+and every estimate must satisfy `h(u) ≤ weight(u, v) + h(v)` along each traversable direction, so the
+reported distance always agrees with Dijkstra. The result carries `source`, `target`, `distance`,
+`path` and `expanded` (the number of distinct nodes expanded).
 
 ## What the results promise
 
@@ -78,8 +83,8 @@ Graphs are **undirected unless `--directed` is passed**.
 
 ```
 graphtk/graph.py        graph, edges, CSR, degrees, diagnostics
-graphtk/algorithms.py   BFS/DFS, Dijkstra, Bellman-Ford, components, topological sort, PageRank, centrality, clustering
+graphtk/algorithms.py   BFS/DFS, Dijkstra, A*, Bellman-Ford, components, topological sort, PageRank, centrality, clustering
 graphtk/incremental.py  union-find components with staleness tracking
-graphtk/cli.py          twelve subcommands and the exit-code contract
+graphtk/cli.py          thirteen subcommands and the exit-code contract
 tests/                  structure, traversal, shortest paths, ordering, ranking, clustering, incremental behaviour
 ```

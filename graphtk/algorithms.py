@@ -8,8 +8,10 @@ topological sort.
 
 from __future__ import annotations
 
+import heapq
 import math
 from dataclasses import dataclass
+from typing import Mapping
 
 from .errors import CycleError, NegativeCycleError, NegativeWeightError, ValidationError
 from .graph import Graph
@@ -124,6 +126,93 @@ def path_from(previous: dict[str, str | None], target: str) -> list[str]:
     while previous[path[-1]] is not None:
         path.append(str(previous[path[-1]]))
     return list(reversed(path))
+
+
+def _validated_heuristic(graph: Graph, target: str, heuristic: Mapping[str, float] | None) -> dict[str, float]:
+    """Normalise the heuristic map, or raise ValidationError naming the first offending entry.
+
+    Nodes missing from the map estimate to 0. Every supplied value must be a finite, non-negative
+    number naming a node of the graph; the target must estimate to exactly 0; and along every
+    traversable direction the estimate must be consistent -- h(u) <= weight(u, v) + h(v) -- which is
+    what guarantees the first time the target leaves the frontier its distance is final. All checks
+    walk nodes and edges in sorted order, so the reported violation never depends on the mapping's
+    key order.
+    """
+    estimates = {node: 0.0 for node in graph.nodes()}
+    if not heuristic:
+        return estimates
+    known = set(graph.nodes())
+    for node in sorted(heuristic):
+        value = heuristic[node]
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+            raise ValidationError("heuristic values must be finite numbers", node=node)
+        estimate = float(value)
+        if estimate < 0:
+            raise ValidationError("heuristic values must be non-negative", node=node, value=estimate)
+        if node not in known:
+            raise ValidationError(f"heuristic names an unknown node: {node}", known=graph.nodes()[:10])
+        estimates[node] = estimate
+    if estimates[target] != 0.0:
+        raise ValidationError("heuristic for the target must be 0", target=target, value=estimates[target])
+    # A small tolerance keeps float summation noise (0.1 + 0.2) from reading as a violation; a real
+    # inconsistency exceeds it by construction.
+    for node in graph.nodes():
+        for neighbour, weight in graph.neighbors(node):
+            if estimates[node] > weight + estimates[neighbour] + 1e-9:
+                raise ValidationError(
+                    "heuristic is not consistent: h(u) must not exceed weight(u, v) + h(v)",
+                    edge=f"{node}->{neighbour}",
+                    estimate=estimates[node],
+                    bound=round(weight + estimates[neighbour], 10),
+                )
+    return estimates
+
+
+def astar(
+    graph: Graph,
+    source: str,
+    target: str,
+    heuristic: Mapping[str, float] | None = None,
+) -> tuple[float, dict[str, str | None], int]:
+    """Goal-directed shortest path from `source` to `target` guided by a consistent heuristic.
+
+    Returns the distance to `target`, a predecessor map `path_from` can rebuild the route from, and
+    the number of distinct nodes expanded. The frontier is a heap keyed by (estimated total cost,
+    node name), so equal-cost candidates and equal-cost paths are always settled by node name; with
+    an empty heuristic the search degenerates to Dijkstra and agrees with it exactly. A negative
+    edge is refused up front, an unreachable target raises rather than inventing a distance.
+    """
+    _check_source(graph, source)
+    if target not in graph.nodes():
+        raise ValidationError(f"unknown target: {target}", known=graph.nodes()[:10])
+    for edge in graph.edges():
+        if edge.weight < 0:
+            raise NegativeWeightError(
+                "astar requires non-negative weights; use bellman_ford",
+                edge=f"{edge.source}->{edge.target}",
+                weight=edge.weight,
+            )
+    estimates = _validated_heuristic(graph, target, heuristic)
+    distance: dict[str, float] = {source: 0.0}
+    previous: dict[str, str | None] = {source: None}
+    frontier: list[tuple[float, str]] = [(estimates[source], source)]
+    expanded: set[str] = set()
+    while frontier:
+        _, current = heapq.heappop(frontier)
+        if current in expanded:
+            continue
+        expanded.add(current)
+        if current == target:
+            return distance[target], previous, len(expanded)
+        for neighbour, weight in graph.neighbors(current):
+            if neighbour in expanded:
+                continue
+            candidate = distance[current] + weight
+            if neighbour not in distance or candidate < distance[neighbour]:
+                distance[neighbour] = candidate
+                previous[neighbour] = current
+                heapq.heappush(frontier, (candidate + estimates[neighbour], neighbour))
+    raise ValidationError(f"unreachable target: {target}")
 
 
 def components(graph: Graph) -> list[list[str]]:

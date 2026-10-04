@@ -9,6 +9,7 @@ topological sort.
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 from .errors import CycleError, NegativeCycleError, NegativeWeightError, ValidationError
@@ -20,6 +21,11 @@ INFINITY = math.inf
 def _check_source(graph: Graph, source: str) -> None:
     if source not in graph.nodes():
         raise ValidationError(f"unknown source: {source}", known=graph.nodes()[:10])
+
+
+def _check_target(graph: Graph, target: str) -> None:
+    if target not in graph.nodes():
+        raise ValidationError(f"unknown target: {target}", known=graph.nodes()[:10])
 
 
 def bfs(graph: Graph, source: str) -> dict[str, int]:
@@ -86,6 +92,94 @@ def dijkstra(graph: Graph, source: str) -> tuple[dict[str, float], dict[str, str
                 distance[neighbour] = candidate
                 previous[neighbour] = current
     return distance, previous
+
+
+def astar(
+    graph: Graph,
+    source: str,
+    target: str,
+    heuristic: Mapping[str, float],
+) -> tuple[dict[str, float], dict[str, str | None], int]:
+    """A* shortest path from `source` to `target` guided by an admissible, consistent heuristic.
+
+    Returns the distance map, a predecessor map usable with `path_from`, and the number of distinct
+    nodes actually expanded. An empty (or all-zero) heuristic degenerates to Dijkstra; the expansion
+    order and equal-cost tie-breaks are by node name, so the result never depends on edge or mapping
+    iteration order. The heuristic is validated up front -- only finite non-negative values, for nodes
+    of the graph, zero at the target, and ``h(u) <= weight(u, v) + h(v)`` on every walkable arc -- so
+    the distances reported are exactly the Dijkstra distances.
+    """
+    _check_source(graph, source)
+    _check_target(graph, target)
+    for edge in graph.edges():
+        if edge.weight < 0:
+            raise NegativeWeightError(
+                "astar requires non-negative weights; use bellman_ford",
+                edge=f"{edge.source}->{edge.target}",
+                weight=edge.weight,
+            )
+    nodes = set(graph.nodes())
+    values: dict[str, float] = {}
+    # JSON object keys are always strings; a non-string key can only arrive through a hand-built
+    # mapping, and it cannot participate in a name-sorted traversal.
+    for node in heuristic:
+        if not isinstance(node, str):
+            raise ValidationError("heuristic keys must be node name strings", value=node)
+    # Sorted first so that which bad value is reported never depends on the mapping's insertion order.
+    for node in sorted(heuristic):
+        raw = heuristic[node]
+        if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+            raise ValidationError(f"heuristic value for {node} must be a finite non-negative number", value=raw)
+        value = float(raw)
+        if not math.isfinite(value) or value < 0:
+            raise ValidationError(f"heuristic value for {node} must be a finite non-negative number", value=raw)
+        if node not in nodes:
+            raise ValidationError(f"heuristic names a node not in the graph: {node}", value=node)
+        values[node] = value
+    if values.get(target, 0.0) != 0.0:
+        raise ValidationError(
+            f"heuristic at the target must be 0, got {values[target]}", node=target, value=values[target]
+        )
+    # Consistency over every walkable arc; report the first violation in a node-sorted traversal.
+    for node in graph.nodes():
+        h_node = values.get(node, 0.0)
+        for neighbour, weight in graph.neighbors(node):
+            h_neighbour = values.get(neighbour, 0.0)
+            # Only floating-point dust below the same 1e-9 scale compare uses is ignored; a genuinely
+            # inconsistent heuristic is refused rather than silently answering like Dijkstra anyway.
+            if h_node > weight + h_neighbour + 1e-9:
+                raise ValidationError(
+                    "heuristic violates consistency: h(u) <= weight(u, v) + h(v)",
+                    edge=f"{node}->{neighbour}",
+                    heuristic=h_node,
+                    bound=round(weight + h_neighbour, 10),
+                )
+
+    def h(node: str) -> float:
+        return values.get(node, 0.0)
+
+    distance: dict[str, float] = {source: 0.0}
+    previous: dict[str, str | None] = {source: None}
+    open_set = {source}
+    closed: set[str] = set()
+    expanded = 0
+    while open_set:
+        current = min(open_set, key=lambda node: (distance[node] + h(node), node))
+        if current == target:
+            expanded += 1
+            return distance, previous, expanded
+        open_set.remove(current)
+        closed.add(current)
+        expanded += 1
+        for neighbour, weight in graph.neighbors(current):
+            if neighbour in closed:
+                continue
+            candidate = distance[current] + weight
+            if neighbour not in distance or candidate < distance[neighbour]:
+                distance[neighbour] = candidate
+                previous[neighbour] = current
+                open_set.add(neighbour)
+    raise ValidationError(f"unreachable target: {target}", source=source, target=target)
 
 
 def bellman_ford(graph: Graph, source: str) -> tuple[dict[str, float], dict[str, str | None]]:

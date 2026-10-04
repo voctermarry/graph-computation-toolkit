@@ -16,6 +16,7 @@ from typing import Any, NoReturn, Sequence
 
 from . import __version__
 from .algorithms import (
+    astar,
     bellman_ford,
     bfs,
     clustering,
@@ -88,6 +89,30 @@ def _read_file(path: str) -> list[str]:
         raise ValidationError(f"cannot read edges: {error.strerror or error}", value=path) from error
 
 
+def _read_heuristic(path: str) -> dict[str, float]:
+    """Read the node -> remaining-cost object; malformed files are ParseError, never partial data."""
+    try:
+        with open(path, encoding="utf-8") as handle:
+            text = handle.read()
+    except OSError as error:
+        raise ValidationError(f"cannot read heuristic: {error.strerror or error}", value=path) from error
+    try:
+        document = json.loads(text, parse_constant=_reject_constant)
+    except json.JSONDecodeError as error:
+        raise ParseError(f"invalid JSON: {error.msg}") from error
+    except ValueError as error:
+        raise ParseError(str(error)) from error
+    if not isinstance(document, dict):
+        raise ParseError("heuristic must be a JSON object of node name to remaining cost")
+    values: dict[str, float] = {}
+    for node in sorted(document):
+        raw = document[node]
+        if isinstance(raw, bool) or not isinstance(raw, (int, float)) or not math.isfinite(raw):
+            raise ParseError(f"heuristic value for {node!r} must be a finite number")
+        values[node] = float(raw)
+    return values
+
+
 def _round(distances: dict[str, float]) -> dict[str, float]:
     return {node: round(value, 10) for node, value in sorted(distances.items())}
 
@@ -99,6 +124,7 @@ def _command_describe(_: argparse.Namespace) -> int:
             "name": "graph-computation-toolkit",
             "version": __version__,
             "subcommands": [
+                "astar",
                 "bellman-ford",
                 "bfs",
                 "centrality",
@@ -150,6 +176,22 @@ def _command_dijkstra(args: argparse.Namespace) -> int:
         document["distance"] = round(distance[args.target], 10)
     _emit(document)
     return EXIT_OK if args.target in distance or (args.target is None and len(distance) > 1) else EXIT_NEGATIVE
+
+
+def _command_astar(args: argparse.Namespace) -> int:
+    graph = _graph_from(args)
+    heuristic = _read_heuristic(args.heuristic)
+    distance, previous, expanded = astar(graph, args.source, args.target, heuristic)
+    _emit(
+        {
+            "source": args.source,
+            "target": args.target,
+            "distance": round(distance[args.target], 10),
+            "path": path_from(previous, args.target),
+            "expanded": expanded,
+        }
+    )
+    return EXIT_OK
 
 
 def _command_bellman_ford(args: argparse.Namespace) -> int:
@@ -248,6 +290,12 @@ def build_parser() -> argparse.ArgumentParser:
     dijkstra_command.add_argument("--source", required=True)
     dijkstra_command.add_argument("--target")
     dijkstra_command.set_defaults(handler=_command_dijkstra)
+
+    astar_command = with_graph("astar", "A* shortest path to one target with a heuristic")
+    astar_command.add_argument("--source", required=True)
+    astar_command.add_argument("--target", required=True)
+    astar_command.add_argument("--heuristic", required=True, help="UTF-8 JSON object of node to remaining cost")
+    astar_command.set_defaults(handler=_command_astar)
 
     bellman_command = with_graph("bellman-ford", "shortest paths with negative weights")
     bellman_command.add_argument("--source", required=True)

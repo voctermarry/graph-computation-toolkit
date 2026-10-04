@@ -29,6 +29,13 @@ the algorithms that support it. Unknown fields are rejected, and every parse err
 
 Graphs are **undirected unless `--directed` is passed**.
 
+`astar` additionally reads `--heuristic`: a UTF-8 JSON object mapping node name to an estimated
+remaining cost, e.g. `{"a": 3, "b": 2, "c": 1}`. Missing nodes count as `0`. Values must be finite
+non-negative numbers (booleans, strings, `null` and the `NaN`/`Infinity` constants are rejected),
+keys must name graph nodes, the target must be `0`, and the heuristic must be consistent —
+`h(u) <= weight(u, v) + h(v)` on every walkable edge; the first violating edge in node order is
+reported. An empty object degenerates to Dijkstra.
+
 ## Commands
 
 | Command | Purpose | Exit codes |
@@ -38,6 +45,7 @@ Graphs are **undirected unless `--directed` is passed**.
 | `bfs --source S` | hop distances plus a depth-first pre-order | 0 / **3** / 2 |
 | `dijkstra --source S [--target T]` | non-negative shortest paths; `--target` adds `path` | 0 / **3** / 2 |
 | `bellman-ford --source S [--target T]` | shortest paths with negative weights | 0 / **3** / 2 |
+| `astar --source S --target T --heuristic H` | A* shortest path to one target; prints `distance`, `path`, `expanded` | 0 / 2 |
 | `components` | weakly connected components, each sorted | 0 / **3** / 2 |
 | `toposort` | topological order (**requires `--directed`**) | 0 / 2 |
 | `pagerank [--damping] [--tolerance]` | power iteration with explicit convergence reporting | 0 / **3** (not converged) / 2 |
@@ -58,6 +66,14 @@ Graphs are **undirected unless `--directed` is passed**.
 * **Refusals carry evidence.** Dijkstra over a negative edge raises `negative_weight_error` naming the
   edge; Bellman-Ford on a negative cycle raises `negative_cycle_error`; a cyclic graph under `toposort`
   raises `cycle_error` with the nodes that could never be released.
+* **A\* is Dijkstra with a promise.** `astar` accepts only non-negative graphs and a heuristic that
+  is finite, non-negative, zero at the target and consistent (`h(u) <= w(u,v) + h(v)`), so the
+  reported distance and path are exactly Dijkstra's while `expanded` counts the distinct nodes the
+  heuristic actually pruned the search to; an empty heuristic expands the same nodes Dijkstra does.
+  A negative edge raises `negative_weight_error`; an unknown node, a non-zero target, an
+  inconsistent value (naming the first violating edge in node order) or an unreachable target raise
+  `validation_error`; a malformed heuristic file raises `parse_error`. All errors exit **2** and
+  write nothing to stdout.
 * **Two implementations must agree.** `compare` is the guarantee: Dijkstra and Bellman-Ford are
   independent code paths, and the command reports `identical`, the node count compared, both reachable
   counts, and every differing node — exiting **3** when they disagree.
@@ -78,8 +94,8 @@ Graphs are **undirected unless `--directed` is passed**.
 
 ```
 graphtk/graph.py        graph, edges, CSR, degrees, diagnostics
-graphtk/algorithms.py   BFS/DFS, Dijkstra, Bellman-Ford, components, topological sort, PageRank, centrality, clustering
+graphtk/algorithms.py   BFS/DFS, Dijkstra, A*, Bellman-Ford, components, topological sort, PageRank, centrality, clustering
 graphtk/incremental.py  union-find components with staleness tracking
-graphtk/cli.py          twelve subcommands and the exit-code contract
+graphtk/cli.py          thirteen subcommands and the exit-code contract
 tests/                  structure, traversal, shortest paths, ordering, ranking, clustering, incremental behaviour
 ```

@@ -1,10 +1,12 @@
-"""Graph construction, traversal, shortest paths, centrality and incremental updates."""
+"""Graph construction, traversal, shortest paths, centrality, clustering and incremental updates."""
 
 from .algorithms import (
     INFINITY,
+    ClusteringResult,
     PageRankResult,
     bellman_ford,
     bfs,
+    clustering,
     components,
     degree_centrality,
     dfs,
@@ -25,6 +27,7 @@ from .errors import (
 from .graph import Edge, Graph
 
 __all__ = [
+    "ClusteringResult",
     "CycleError",
     "Edge",
     "Graph",
@@ -38,6 +41,7 @@ __all__ = [
     "ValidationError",
     "bellman_ford",
     "bfs",
+    "clustering",
     "components",
     "degree_centrality",
     "dfs",

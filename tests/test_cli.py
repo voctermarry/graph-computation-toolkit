@@ -8,6 +8,7 @@ import json
 import os
 import tempfile
 import unittest
+import unittest.mock
 
 from graphtk.cli import EXIT_ERROR, EXIT_NEGATIVE, EXIT_OK, main
 
@@ -119,6 +120,125 @@ class CLITests(unittest.TestCase):
         code, out, _ = run_cli(["centrality", "--edges", self.edges])
         self.assertEqual(code, EXIT_OK)
         self.assertGreater(json.loads(out)["centrality"]["b"], 0.0)
+
+    def test_clustering_reports_the_full_document_in_canonical_order(self) -> None:
+        triangle = self.write_edges(
+            [
+                {"source": "a", "target": "b"},
+                {"source": "b", "target": "c"},
+                {"source": "a", "target": "c"},
+                {"source": "c", "target": "d"},
+            ]
+        )
+        code, out, err = run_cli(["clustering", "--edges", triangle])
+        self.assertEqual((code, err), (EXIT_OK, ""))
+        self.assertEqual(
+            out,
+            json.dumps(
+                {
+                    "average": 0.5833333333,
+                    "coefficients": {"a": 1.0, "b": 1.0, "c": 0.3333333333, "d": 0.0},
+                    "connectedTriples": 5,
+                    "nodes": ["a", "b", "c", "d"],
+                    "transitivity": 0.6,
+                    "triangles": 1,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            + "\n",
+        )
+
+    def test_clustering_matches_the_library_over_directed_mixed_orientation_edges(self) -> None:
+        arcs = self.write_edges(
+            [
+                {"source": "a", "target": "b"},
+                {"source": "c", "target": "b"},
+                {"source": "a", "target": "c"},
+                {"source": "b", "target": "a"},  # bidirectional pair must count once
+                {"source": "a", "target": "a"},  # self-loop is neither neighbour nor triangle
+            ]
+        )
+        code, out, _ = run_cli(["clustering", "--edges", arcs, "--directed"])
+        self.assertEqual(code, EXIT_OK)
+        document = json.loads(out)
+        self.assertEqual(document["triangles"], 1)
+        self.assertEqual(document["connectedTriples"], 3)
+        self.assertEqual(document["transitivity"], 1.0)
+        self.assertEqual(document["coefficients"], {"a": 1.0, "b": 1.0, "c": 1.0})
+        self.assertEqual(document["nodes"], ["a", "b", "c"])
+
+    def test_clustering_is_byte_identical_across_insertion_orders(self) -> None:
+        rows = [
+            {"source": "a", "target": "b", "weight": 3.0},
+            {"source": "b", "target": "c", "weight": -2.0},
+            {"source": "a", "target": "c"},
+            {"source": "c", "target": "d"},
+            {"source": "d", "target": "b"},
+        ]
+
+        def emit(order: list[dict], directed: bool, tag: str) -> str:
+            path = self.write_edges(order, f"order-{tag}.jsonl")
+            argv = ["clustering", "--edges", path]
+            if directed:
+                argv.append("--directed")
+            code, out, err = run_cli(argv)
+            self.assertEqual((code, err), (EXIT_OK, ""))
+            return out
+
+        # Undirected: reversed order with swapped endpoints is the same simple graph.
+        swapped = [
+            {"source": row["target"], "target": row["source"], **({"weight": row["weight"]} if "weight" in row else {})}
+            for row in reversed(rows)
+        ]
+        self.assertEqual(emit(rows, False, "u-a"), emit(swapped, False, "u-b"))
+        # Directed: the same arcs in reverse insertion order.
+        self.assertEqual(emit(rows, True, "d-a"), emit(list(reversed(rows)), True, "d-b"))
+
+    def test_clustering_reads_the_edge_list_from_stdin(self) -> None:
+        text = "".join(json.dumps(row) + "\n" for row in EDGES)
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), unittest.mock.patch(
+            "graphtk.cli.sys.stdin", io.StringIO(text)
+        ):
+            code = main(["clustering", "--edges", "-", "--directed"])
+        self.assertEqual((code, err.getvalue()), (EXIT_OK, ""))
+        document = json.loads(out.getvalue())
+        self.assertEqual(document["nodes"], ["a", "b", "c", "d"])
+        self.assertEqual(document["triangles"], 1)
+
+    def test_clustering_empty_graph_is_a_complete_zero_document(self) -> None:
+        empty = self.write_edges([])
+        code, out, err = run_cli(["clustering", "--edges", empty])
+        self.assertEqual((code, EXIT_NEGATIVE, err), (EXIT_NEGATIVE, EXIT_NEGATIVE, ""))
+        self.assertEqual(
+            json.loads(out),
+            {
+                "average": 0.0,
+                "coefficients": {},
+                "connectedTriples": 0,
+                "nodes": [],
+                "transitivity": 0.0,
+                "triangles": 0,
+            },
+        )
+
+    def test_clustering_parse_and_file_errors_exit_two(self) -> None:
+        broken = self.write_edges([{"source": "a", "target": "b"}])
+        with open(broken, "a", encoding="utf-8", newline="\n") as handle:
+            handle.write("not json\n")
+        code, _, err = run_cli(["clustering", "--edges", broken])
+        self.assertEqual(code, EXIT_ERROR)
+        self.assertEqual(json.loads(err)["error"], "parse_error")
+
+        code, _, err = run_cli(["clustering", "--edges", os.path.join(self.directory.name, "missing.jsonl")])
+        self.assertEqual(code, EXIT_ERROR)
+        self.assertEqual(json.loads(err)["error"], "validation_error")
+
+    def test_describe_publishes_clustering(self) -> None:
+        code, out, _ = run_cli(["describe"])
+        self.assertEqual(code, EXIT_OK)
+        self.assertIn("clustering", json.loads(out)["subcommands"])
 
     def test_compare_agrees_between_the_two_shortest_path_algorithms(self) -> None:
         code, out, _ = run_cli(["compare", "--edges", self.edges, "--directed", "--source", "a"])

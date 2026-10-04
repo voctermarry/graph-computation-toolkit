@@ -40,6 +40,7 @@ Graphs are **undirected unless `--directed` is passed**.
 | `toposort` | topological order (**requires `--directed`**) | 0 / 2 |
 | `pagerank [--damping] [--tolerance]` | power iteration with explicit convergence reporting | 0 / **3** (not converged) / 2 |
 | `centrality` | normalised degree centrality | 0 / **3** / 2 |
+| `clustering` | local coefficients, average, transitivity, triangles and connected triples | 0 / **3** (empty) / 2 |
 | `compare --source S` | run Dijkstra **and** Bellman-Ford and check they agree | 0 / **3** (disagree) / 2 |
 
 `--edges -` reads from stdin.
@@ -58,6 +59,12 @@ Graphs are **undirected unless `--directed` is passed**.
 * **Two implementations must agree.** `compare` is the guarantee: Dijkstra and Bellman-Ford are
   independent code paths, and the command reports `identical`, the node count compared, both reachable
   counts, and every differing node — exiting **3** when they disagree.
+* **Clustering uses the simple undirected view.** `clustering` ignores weights and directions (an edge
+  in either direction joins two nodes, a bidirectional pair counts once, parallel input collapses to one
+  adjacency, self-loops are no one's neighbour). A node with `k` distinct neighbours scores the edges
+  among those neighbours over `k(k−1)/2` (`0` when `k < 2`); the average includes every node, and
+  transitivity is `3·triangles / connectedTriples` (`0` when the denominator is empty). An empty graph
+  still prints the full document with zeroed counters and exits **3**.
 * **Incremental labelling is honest.** `IncrementalComponents` merges components on insertion in
   near-constant time; a **removal** cannot be undone by union-find, so the structure marks itself stale,
   names the affected nodes, and makes `labels()` fail until `recompute()` is called instead of returning
@@ -69,8 +76,8 @@ Graphs are **undirected unless `--directed` is passed**.
 
 ```
 graphtk/graph.py        graph, edges, CSR, degrees, diagnostics
-graphtk/algorithms.py   BFS/DFS, Dijkstra, Bellman-Ford, components, topological sort, PageRank, centrality
+graphtk/algorithms.py   BFS/DFS, Dijkstra, Bellman-Ford, components, topological sort, PageRank, centrality, clustering
 graphtk/incremental.py  union-find components with staleness tracking
-graphtk/cli.py          eleven subcommands and the exit-code contract
-tests/                  structure, traversal, shortest paths, ordering, ranking, incremental behaviour
+graphtk/cli.py          twelve subcommands and the exit-code contract
+tests/                  structure, traversal, shortest paths, ordering, ranking, clustering, incremental behaviour
 ```

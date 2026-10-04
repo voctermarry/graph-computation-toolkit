@@ -1,4 +1,4 @@
-"""Graph algorithms: traversal, shortest paths, components, ordering, PageRank, centrality.
+"""Graph algorithms: traversal, shortest paths, components, ordering, PageRank, centrality, clustering.
 
 Every function is deterministic (sorted iteration), reports unreachable nodes explicitly rather than
 inventing a distance, and raises a typed error with evidence when the input makes the answer
@@ -223,3 +223,73 @@ def degree_centrality(graph: Graph) -> dict[str, float]:
         return {node: 0.0 for node in graph.nodes()}
     denominator = float(total - 1)
     return {node: round(graph.degree(node) / denominator, 10) for node in graph.nodes()}
+
+
+@dataclass(frozen=True, slots=True)
+class ClusteringResult:
+    coefficients: dict[str, float]
+    average: float
+    transitivity: float
+    triangles: int
+    connected_triples: int
+
+    def to_document(self) -> dict[str, object]:
+        return {
+            "coefficients": {node: round(value, 10) for node, value in sorted(self.coefficients.items())},
+            "average": round(self.average, 10),
+            "transitivity": round(self.transitivity, 10),
+            "triangles": self.triangles,
+            "connectedTriples": self.connected_triples,
+        }
+
+
+def _simple_adjacency(graph: Graph) -> dict[str, set[str]]:
+    """The simple undirected view: one adjacency per unordered pair of distinct nodes.
+
+    Built from the graph's own edges so every node survives -- including isolated nodes, which the
+    ``_as_undirected`` rebuild used by components would drop (it only creates endpoints of edges).
+    Either direction of a directed edge counts, a pair present in both directions counts once
+    (set adjacency), and parallel input collapses to a single adjacency; self-loops are dropped
+    because a node is not its own neighbour. Weights never enter the picture.
+    """
+    adjacency: dict[str, set[str]] = {node: set() for node in graph.nodes()}
+    for edge in graph.edges():
+        if edge.source == edge.target:
+            continue
+        adjacency[edge.source].add(edge.target)
+        adjacency[edge.target].add(edge.source)
+    return adjacency
+
+
+def clustering(graph: Graph) -> ClusteringResult:
+    """Local clustering coefficients plus the graph-level aggregates, over a simple undirected reading.
+
+    A node with ``k`` distinct neighbours has coefficient ``links / (k(k-1)/2)`` where ``links`` is
+    the number of undirected edges between those neighbours; ``k < 2`` gives 0. Each closed triplet
+    of neighbours is one triangle corner for the centre, so triangles are the corner count divided by
+    three. The average is the mean over **all** nodes (isolates included), and transitivity is
+    ``3 * triangles / connected_triples`` -- 0 when no connected triples exist.
+    """
+    adjacency = _simple_adjacency(graph)
+    nodes = sorted(adjacency)
+    coefficients: dict[str, float] = {}
+    corner_count = 0
+    connected_triples = 0
+    for node in nodes:
+        neighbours = sorted(adjacency[node])
+        wedges = len(neighbours) * (len(neighbours) - 1) // 2
+        if wedges == 0:
+            coefficients[node] = 0.0
+            continue
+        links = 0
+        for index, left in enumerate(neighbours):
+            for right in neighbours[index + 1 :]:
+                if right in adjacency[left]:
+                    links += 1
+        coefficients[node] = links / wedges
+        corner_count += links
+        connected_triples += wedges
+    triangles = corner_count // 3
+    average = sum(coefficients.values()) / len(nodes) if nodes else 0.0
+    transitivity = 3 * triangles / connected_triples if connected_triples else 0.0
+    return ClusteringResult(coefficients, average, transitivity, triangles, connected_triples)

@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "graph-computation-toolkit"
+version = "0.1.0"
+description = "Graph algorithms from traversal to centrality and incremental updates (stdlib only)"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+graph-computation-toolkit = "graphtk.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["graphtk*"]

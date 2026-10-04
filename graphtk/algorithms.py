@@ -142,6 +142,11 @@ def components(graph: Graph) -> list[list[str]]:
 
 def _as_undirected(graph: Graph) -> Graph:
     mirror = Graph(directed=False)
+    # Seed every node before mirroring the edges: a node with no incident arc -- added on its own via
+    # add_node or orphaned by remove_edge -- cannot be recovered from the edge list, yet it must
+    # survive the undirected reading as a singleton component.
+    for node in graph.nodes():
+        mirror.add_node(node)
     for edge in graph.edges():
         mirror.add_edge(edge.source, edge.target, edge.weight)
     return mirror

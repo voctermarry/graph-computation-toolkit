@@ -147,6 +147,91 @@ class StructureTests(unittest.TestCase):
         graph.add_edge("b", "a")
         self.assertEqual(components(graph), [["a", "b"]])
 
+    def test_components_of_only_isolated_directed_nodes_are_singletons(self) -> None:
+        graph = Graph(directed=True)
+        graph.add_node("c")
+        graph.add_node("a")
+        graph.add_node("b")
+        self.assertEqual(components(graph), [["a"], ["b"], ["c"]])
+
+    def test_components_cover_edges_isolated_nodes_and_self_loops_in_a_directed_graph(self) -> None:
+        graph = Graph(directed=True)
+        for source, target in (("d", "b"), ("c", "d")):  # b-c-d weak group ignoring direction
+            graph.add_edge(source, target)
+        graph.add_edge("l", "l")  # self loop: one node, no extra members
+        graph.add_node("a")
+        graph.add_node("e")
+        groups = components(graph)
+        self.assertEqual(groups, [["a"], ["b", "c", "d"], ["e"], ["l"]])
+        flat = [node for group in groups for node in group]
+        self.assertEqual(sorted(flat), graph.nodes())
+        self.assertEqual(len(flat), len(set(flat)))
+
+    def test_components_keep_nodes_orphaned_by_remove_edge(self) -> None:
+        graph = Graph(directed=True)
+        graph.add_edge("a", "b")
+        graph.add_edge("b", "c")
+        self.assertTrue(graph.remove_edge("a", "b"))
+        self.assertEqual(components(graph), [["a"], ["b", "c"]])
+        # Removing the last incident edge on both sides leaves two singleton components.
+        graph.remove_edge("b", "c")
+        self.assertEqual(components(graph), [["a"], ["b"], ["c"]])
+
+    def test_directed_components_do_not_change_with_insertion_order(self) -> None:
+        rows = [
+            ("d", "b"),
+            ("b", "d"),
+            ("c", "d"),
+            ("l", "l"),
+        ]
+        isolated = ["a", "e"]
+
+        def build(order: list[int]) -> Graph:
+            graph = Graph(directed=True)
+            for index in order:
+                graph.add_edge(*rows[index])
+            for node in isolated:
+                graph.add_node(node)
+            return graph
+
+        orders = [
+            list(range(len(rows))),
+            list(reversed(range(len(rows)))),
+            [3, 0, 2, 1],
+            [2, 3, 1, 0],
+        ]
+        expected = [["a"], ["b", "c", "d"], ["e"], ["l"]]
+        for order in orders:
+            graph = build(order)
+            groups = components(graph)
+            self.assertEqual(groups, expected)
+            self.assertEqual(sorted(node for group in groups for node in group), graph.nodes())
+
+    def test_components_of_an_empty_graph_is_an_empty_list(self) -> None:
+        self.assertEqual(components(Graph(directed=True)), [])
+        self.assertEqual(components(Graph()), [])
+
+    def test_components_never_mutate_the_directed_graph(self) -> None:
+        graph = Graph(directed=True)
+        graph.add_edge("b", "a", 3.0)
+        graph.add_edge("l", "l", 2.0)
+        graph.add_node("z")
+        nodes_before, edges_before = graph.nodes(), graph.edges()
+        components(graph)
+        components(graph)
+        self.assertTrue(graph.directed)
+        self.assertEqual(graph.nodes(), nodes_before)
+        self.assertEqual(graph.edges(), edges_before)
+        self.assertEqual(dict(graph.neighbors("b")), {"a": 3.0})
+        self.assertEqual(graph.neighbors("a"), [])
+
+    def test_components_of_an_undirected_graph_still_cover_isolated_nodes(self) -> None:
+        # The undirected path was already node-complete; pin that so the directed fix cannot regress it.
+        graph = Graph()
+        graph.add_edge("a", "b")
+        graph.add_node("z")
+        self.assertEqual(components(graph), [["a", "b"], ["z"]])
+
     def test_topological_sort_respects_edges(self) -> None:
         graph = Graph(directed=True)
         for source, target in (("a", "b"), ("a", "c"), ("b", "d"), ("c", "d")):

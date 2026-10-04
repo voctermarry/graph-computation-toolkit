@@ -10,8 +10,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
-from typing import Any, Sequence
+from typing import Any, NoReturn, Sequence
 
 from . import __version__
 from .algorithms import (
@@ -42,6 +43,13 @@ def _emit(document: dict[str, Any]) -> None:
     sys.stdout.write(canonical(document) + "\n")
 
 
+def _reject_constant(text: str) -> NoReturn:
+    # json.loads accepts the non-standard tokens NaN, Infinity and -Infinity by default, producing
+    # float values that cannot be serialised back to strict JSON and would poison every computation.
+    # Refuse them while parsing so they are reported as a parse error on the line they occupy.
+    raise ValueError(f"non-standard numeric constant: {text}")
+
+
 def _read_edges(path: str, directed: bool) -> Graph:
     lines = sys.stdin.read().splitlines() if path == "-" else _read_file(path)
     graph = Graph(directed=directed)
@@ -50,9 +58,11 @@ def _read_edges(path: str, directed: bool) -> Graph:
         if not stripped or stripped.startswith("#"):
             continue
         try:
-            document = json.loads(stripped)
+            document = json.loads(stripped, parse_constant=_reject_constant)
         except json.JSONDecodeError as error:
             raise ParseError(f"invalid JSON: {error.msg}", line=number) from error
+        except ValueError as error:
+            raise ParseError(str(error), line=number) from error
         if not isinstance(document, dict):
             raise ParseError("each line must be a JSON object", line=number)
         unknown = sorted(set(document) - {"source", "target", "weight"})
@@ -64,8 +74,8 @@ def _read_edges(path: str, directed: bool) -> Graph:
         if not isinstance(source, str) or not isinstance(target, str) or not source or not target:
             raise ParseError("source and target must be non-empty strings", line=number)
         weight = document.get("weight", 1.0)
-        if isinstance(weight, bool) or not isinstance(weight, (int, float)):
-            raise ParseError("weight must be a number", line=number)
+        if isinstance(weight, bool) or not isinstance(weight, (int, float)) or not math.isfinite(weight):
+            raise ParseError("weight must be a finite number", line=number)
         graph.add_edge(source, target, float(weight))
     return graph
 

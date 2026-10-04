@@ -46,6 +46,20 @@ class CLITests(unittest.TestCase):
                 handle.write(json.dumps(row) + "\n")
         return path
 
+    def write_raw_lines(self, lines: list[str], name: str = "raw.jsonl") -> str:
+        path = os.path.join(self.directory.name, name)
+        with open(path, "w", encoding="utf-8", newline="\n") as handle:
+            for line in lines:
+                handle.write(line + "\n")
+        return path
+
+    def run_stdin(self, argv: list[str], text: str) -> tuple[int, str, str]:
+        out, err = io.StringIO(), io.StringIO()
+        stdin = io.StringIO(text)
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), unittest.mock.patch.object(sys, "stdin", stdin):
+            code = main(argv)
+        return code, out.getvalue(), err.getvalue()
+
     def test_describe_publishes_the_contract(self) -> None:
         code, out, err = run_cli(["describe"])
         self.assertEqual((code, err), (EXIT_OK, ""))
@@ -255,6 +269,124 @@ class CLITests(unittest.TestCase):
         self.assertEqual(code, EXIT_OK)
         code, _, _ = run_cli(["components", "--edges", self.write_edges([{"source": "a", "target": "a"}])])
         self.assertEqual(code, EXIT_OK)
+
+    # -- weight validation across the JSONL / stdin input chain ------------------------------------
+    NON_FINITE_CONSTANTS = ["NaN", "Infinity", "-Infinity"]
+
+    def assert_parse_error(self, code: int, out: str, err: str, line: int) -> dict:
+        self.assertEqual(code, EXIT_ERROR)
+        self.assertEqual(out, "")  # nothing on stdout: no document with non-standard values
+        document = json.loads(err)  # stderr is itself strict JSON
+        self.assertEqual(document["error"], "parse_error")
+        self.assertEqual(document["line"], line)
+        return document
+
+    def test_non_finite_constants_in_a_file_are_parse_errors_with_line_numbers(self) -> None:
+        for constant in self.NON_FINITE_CONSTANTS:
+            with self.subTest(constant=constant):
+                # The constant is on line 2, after one legal edge and a comment/blank line.
+                path = self.write_raw_lines(
+                    [
+                        json.dumps({"source": "a", "target": "b", "weight": 1.0}),
+                        "# a comment",
+                        "",
+                        f'{{"source": "b", "target": "c", "weight": {constant}}}',
+                    ],
+                    name=f"{constant.strip('-').lower()}.jsonl",
+                )
+                code, out, err = run_cli(["stats", "--edges", path])
+                self.assert_parse_error(code, out, err, 4)
+
+    def test_non_finite_constants_on_stdin_are_parse_errors_with_line_numbers(self) -> None:
+        for constant in self.NON_FINITE_CONSTANTS:
+            with self.subTest(constant=constant):
+                text = (
+                    '{"source": "a", "target": "b", "weight": 1.0}\n'
+                    f'{{"source": "b", "target": "c", "weight": {constant}}}\n'
+                )
+                code, out, err = self.run_stdin(["components", "--edges", "-"], text)
+                self.assert_parse_error(code, out, err, 2)
+
+    def test_non_finite_first_line_still_reports_line_one(self) -> None:
+        path = self.write_raw_lines(['{"source": "a", "target": "b", "weight": NaN}'])
+        code, out, err = run_cli(["stats", "--edges", path])
+        self.assert_parse_error(code, out, err, 1)
+
+    def test_bad_weight_types_in_json_are_parse_errors_with_line_numbers(self) -> None:
+        cases = {
+            "string": '{"source": "a", "target": "b", "weight": "1.5"}',
+            "null": '{"source": "a", "target": "b", "weight": null}',
+            "bool": '{"source": "a", "target": "b", "weight": true}',
+            "array": '{"source": "a", "target": "b", "weight": [1.0]}',
+            "object": '{"source": "a", "target": "b", "weight": {"v": 1.0}}',
+        }
+        for name, line in cases.items():
+            with self.subTest(name=name):
+                path = self.write_raw_lines([line])
+                code, out, err = run_cli(["stats", "--edges", path])
+                self.assert_parse_error(code, out, err, 1)
+
+    def test_non_finite_weight_fails_for_every_graph_command(self) -> None:
+        path = self.write_raw_lines(['{"source": "a", "target": "b", "weight": Infinity}'])
+        commands = [
+            ["stats"],
+            ["bfs", "--source", "a"],
+            ["dijkstra", "--source", "a"],
+            ["bellman-ford", "--source", "a"],
+            ["components"],
+            ["toposort", "--directed"],
+            ["pagerank"],
+            ["centrality"],
+            ["clustering"],
+            ["compare", "--source", "a"],
+        ]
+        for command in commands:
+            with self.subTest(command=command[0]):
+                code, out, err = run_cli([*command, "--edges", path])
+                self.assert_parse_error(code, out, err, 1)
+
+    def test_legal_extreme_and_negative_weights_are_still_accepted(self) -> None:
+        rows = [
+            {"source": "a", "target": "b", "weight": 0},
+            {"source": "b", "target": "c", "weight": -2},
+            {"source": "a", "target": "c", "weight": 1e-300},
+            {"source": "c", "target": "d", "weight": 1e308},
+        ]
+        path = self.write_edges(rows)
+        code, out, err = run_cli(["bellman-ford", "--edges", path, "--directed", "--source", "a"])
+        self.assertEqual((code, err), (EXIT_OK, ""))
+        document = json.loads(out)
+        self.assertEqual(document["distances"]["b"], 0.0)
+        self.assertEqual(document["distances"]["c"], -2.0)
+
+    def test_negative_weight_dijkstra_is_still_negative_weight_error(self) -> None:
+        negative = self.write_edges([{"source": "a", "target": "b", "weight": -1}])
+        code, out, err = run_cli(["dijkstra", "--edges", negative, "--source", "a"])
+        self.assertEqual(code, EXIT_ERROR)
+        self.assertEqual(out, "")
+        self.assertEqual(json.loads(err)["error"], "negative_weight_error")
+
+    def test_weight_error_does_not_leak_a_builtin_exception(self) -> None:
+        path = self.write_raw_lines(['{"source": "a", "target": "b", "weight": NaN}'])
+        code, out, err = run_cli(["stats", "--edges", path])
+        self.assertEqual(code, EXIT_ERROR)
+        self.assertEqual(out, "")
+        document = json.loads(err)
+        # The document carries the stable kind, not a traceback or builtin type name.
+        self.assertEqual(set(document), {"error", "message", "line"})
+        self.assertNotIn("Traceback", err)
+
+    def test_integer_and_decimal_weights_normalise_and_compare_still_agrees(self) -> None:
+        rows = [
+            {"source": "a", "target": "b", "weight": 2},
+            {"source": "b", "target": "c", "weight": 0.5},
+            {"source": "a", "target": "c", "weight": 9},
+        ]
+        path = self.write_edges(rows)
+        code, out, err = run_cli(["compare", "--edges", path, "--directed", "--source", "a"])
+        self.assertEqual((code, err), (EXIT_OK, ""))
+        document = json.loads(out)
+        self.assertTrue(document["identical"])
 
 
 if __name__ == "__main__":

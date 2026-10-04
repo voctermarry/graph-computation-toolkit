@@ -6,9 +6,26 @@ every algorithm in this package is deterministic without depending on insertion 
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 
 from .errors import ValidationError
+
+
+def _validated_weight(weight: object) -> float:
+    """Normalise an edge weight to float, or raise ValidationError.
+
+    ``bool`` is rejected even though it subclasses ``int``; strings and ``None`` are rejected even
+    though ``float()`` would accept some of them; and NaN plus the two infinities are rejected
+    because a single non-finite value poisons every distance, rank and JSON document it reaches.
+    Negative finite values are legal -- Bellman-Ford needs them.
+    """
+    if isinstance(weight, bool) or not isinstance(weight, (int, float)):
+        raise ValidationError("edge weight must be a finite number", value=weight)
+    value = float(weight)
+    if not math.isfinite(value):
+        raise ValidationError("edge weight must be finite")
+    return value
 
 
 @dataclass(frozen=True, slots=True)
@@ -20,8 +37,7 @@ class Edge:
     def __post_init__(self) -> None:
         if not self.source or not self.target:
             raise ValidationError("edge endpoints must be non-empty", value=f"{self.source!r}->{self.target!r}")
-        if isinstance(self.weight, bool) or not isinstance(self.weight, (int, float)):
-            raise ValidationError("edge weight must be a number", value=self.weight)
+        object.__setattr__(self, "weight", _validated_weight(self.weight))
 
     def to_document(self) -> dict[str, object]:
         return {"source": self.source, "target": self.target, "weight": float(self.weight)}
@@ -39,13 +55,16 @@ class Graph:
         self._adjacency.setdefault(node, {})
 
     def add_edge(self, source: str, target: str, weight: float = 1.0) -> None:
+        # Validate before touching any state: a rejected weight must add neither endpoint, overwrite
+        # no existing edge, and -- for an undirected graph -- never leave just one half behind.
+        value = _validated_weight(weight)
         self.add_node(source)
         self.add_node(target)
         if self.directed:
-            self._adjacency[source][target] = float(weight)
+            self._adjacency[source][target] = value
         else:
-            self._adjacency[source][target] = float(weight)
-            self._adjacency[target][source] = float(weight)
+            self._adjacency[source][target] = value
+            self._adjacency[target][source] = value
 
     def remove_edge(self, source: str, target: str) -> bool:
         removed = False

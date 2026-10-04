@@ -22,8 +22,10 @@ One JSON object per line, blank lines and `#` comments ignored:
 {"source": "a", "target": "b", "weight": 2.5}
 ```
 
-`weight` is optional (default `1.0`) and may be negative for the algorithms that support it. Unknown
-fields are rejected, and every parse error carries its `line`.
+`weight` is optional (default `1.0`), must be a finite `int` or `float` — booleans, strings, `null`
+and the non-standard `NaN`/`Infinity`/`-Infinity` constants are rejected — and may be negative for
+the algorithms that support it. Unknown fields are rejected, and every parse error carries its
+`line`.
 
 Graphs are **undirected unless `--directed` is passed**.
 

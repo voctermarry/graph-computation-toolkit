@@ -36,7 +36,9 @@ class IncrementalComponents:
 
     # -- union-find ------------------------------------------------------------------------------
     def _find(self, node: str) -> str:
-        self._parent.setdefault(node, node)
+        if node not in self._parent:
+            self._parent[node] = node
+            self._rank[node] = 0
         while self._parent[node] != node:
             self._parent[node] = self._parent[self._parent[node]]
             node = self._parent[node]
@@ -59,8 +61,7 @@ class IncrementalComponents:
         self.graph.add_edge(source, target, weight)
         merged = self._union(source, target)
         self.revision += 1
-        if merged:
-            self._stale.clear()
+        # A merge never clears staleness: only recompute() re-derives the full labelling.
         return merged
 
     def remove_edge(self, source: str, target: str) -> bool:

@@ -221,6 +221,91 @@ class IncrementalTests(unittest.TestCase):
         with self.assertRaises(ValidationError):
             IncrementalComponents(Graph(directed=True))
 
+    def test_merging_insert_does_not_clear_staleness(self) -> None:
+        graph = Graph()
+        graph.add_edge("a", "b")
+        graph.add_edge("b", "c")
+        graph.add_edge("d", "e")
+        state = IncrementalComponents(graph)
+        revision = state.revision
+        self.assertTrue(state.remove_edge("b", "c"))
+        self.assertEqual(state.revision, revision + 1)
+        self.assertEqual(state.stale_nodes(), ["b", "c"])
+        # The insert still updates the graph, bumps the revision and reports the merge...
+        revision = state.revision
+        self.assertTrue(state.add_edge("e", "f"))
+        self.assertEqual(state.revision, revision + 1)
+        self.assertIn("f", graph.nodes())
+        # ...but the stale state survives it untouched.
+        self.assertTrue(state.is_stale)
+        self.assertEqual(state.stale_nodes(), ["b", "c"])
+        with self.assertRaises(ValidationError):
+            state.labels()
+        with self.assertRaises(ValidationError):
+            state.component_count()
+        document = state.to_document()
+        self.assertTrue(document["stale"])
+        self.assertNotIn("components", document)
+
+    def test_reinserting_the_removed_edge_does_not_clear_staleness(self) -> None:
+        graph = Graph()
+        graph.add_edge("a", "b")
+        graph.add_edge("b", "c")
+        state = IncrementalComponents(graph)
+        state.remove_edge("b", "c")
+        # Union-find never split, so re-adding reports no merge -- and must not clear staleness either.
+        self.assertFalse(state.add_edge("b", "c"))
+        self.assertTrue(state.is_stale)
+        self.assertEqual(state.stale_nodes(), ["b", "c"])
+        with self.assertRaises(ValidationError):
+            state.labels()
+
+    def test_stale_set_accumulates_removals_and_ignores_failed_ones(self) -> None:
+        graph = Graph()
+        graph.add_edge("a", "b")
+        graph.add_edge("b", "c")
+        graph.add_edge("d", "e")
+        state = IncrementalComponents(graph)
+        state.remove_edge("b", "c")
+        revision = state.revision
+        self.assertTrue(state.remove_edge("a", "b"))
+        self.assertEqual(state.revision, revision + 1)
+        self.assertEqual(state.stale_nodes(), ["a", "b", "c"])
+        revision = state.revision
+        self.assertFalse(state.remove_edge("a", "c"))
+        self.assertFalse(state.remove_edge("x", "y"))
+        self.assertEqual(state.revision, revision)
+        self.assertEqual(state.stale_nodes(), ["a", "b", "c"])
+
+    def test_recompute_rebuilds_from_all_interleaved_edits(self) -> None:
+        graph = Graph()
+        graph.add_edge("a", "b")
+        graph.add_edge("b", "c")
+        graph.add_edge("d", "e")
+        state = IncrementalComponents(graph)
+        state.remove_edge("b", "c")
+        state.add_edge("e", "f")
+        state.add_edge("b", "c")
+        state.remove_edge("a", "b")
+        self.assertTrue(state.is_stale)
+        revision = state.revision
+        state.recompute()
+        self.assertEqual(state.revision, revision + 1)
+        self.assertFalse(state.is_stale)
+        self.assertEqual(state.stale_nodes(), [])
+        # The labelling now reflects every edit made while stale: {a}, {b, c}, {d, e, f}.
+        expected = components(graph)
+        self.assertEqual(state.component_count(), len(expected))
+        labels = state.labels()
+        self.assertEqual(sorted(labels), graph.nodes())
+        groups: dict[str, list[str]] = {}
+        for node, label in labels.items():
+            groups.setdefault(label, []).append(node)
+        by_label = sorted(sorted(group) for group in groups.values())
+        self.assertEqual(by_label, expected)
+        self.assertEqual(labels, state.labels())
+        self.assertEqual(state.to_document()["components"], len(expected))
+
 
 class CrossCheckTests(unittest.TestCase):
     """Independent checks: they compare two answers that must agree, or verify an invariant of the

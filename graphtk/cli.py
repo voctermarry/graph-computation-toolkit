@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from typing import Any, Sequence
 
@@ -66,6 +67,9 @@ def _read_edges(path: str, directed: bool) -> Graph:
         weight = document.get("weight", 1.0)
         if isinstance(weight, bool) or not isinstance(weight, (int, float)):
             raise ParseError("weight must be a number", line=number)
+        # Python's json parser accepts NaN/Infinity/-Infinity; they are not legal weights.
+        if not math.isfinite(weight):
+            raise ParseError("weight must be a finite number", line=number)
         graph.add_edge(source, target, float(weight))
     return graph
 

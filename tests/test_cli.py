@@ -257,5 +257,97 @@ class CLITests(unittest.TestCase):
         self.assertEqual(code, EXIT_OK)
 
 
+class WeightInputTests(unittest.TestCase):
+    """The JSONL weight rule: finite numbers only, reported as parse_error with the line."""
+
+    def setUp(self) -> None:
+        self.directory = tempfile.TemporaryDirectory()
+
+    def tearDown(self) -> None:
+        self.directory.cleanup()
+
+    def write_raw(self, text: str, name: str = "raw.jsonl") -> str:
+        path = os.path.join(self.directory.name, name)
+        with open(path, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(text)
+        return path
+
+    def assert_parse_error(self, path: str, line: int) -> None:
+        code, out, err = run_cli(["stats", "--edges", path])
+        self.assertEqual(code, EXIT_ERROR)
+        self.assertEqual(out, "")  # nothing half-written to stdout
+        document = json.loads(err)  # a JSON error document, never a leaked traceback
+        self.assertEqual(document["error"], "parse_error")
+        self.assertEqual(document["line"], line)
+
+    def test_non_finite_json_constants_are_parse_errors_with_their_line(self) -> None:
+        for token in ("NaN", "Infinity", "-Infinity"):
+            path = self.write_raw(
+                '{"source": "a", "target": "b"}\n'
+                f'{{"source": "b", "target": "c", "weight": {token}}}\n'
+            )
+            with self.subTest(token=token):
+                self.assert_parse_error(path, 2)
+
+    def test_non_numeric_weights_are_parse_errors_with_their_line(self) -> None:
+        rows = [
+            '{"source": "a", "target": "b", "weight": "1.5"}',
+            '{"source": "a", "target": "b", "weight": null}',
+            '{"source": "a", "target": "b", "weight": true}',
+        ]
+        for index, row in enumerate(rows, start=1):
+            path = self.write_raw(row + "\n", f"bad{index}.jsonl")
+            with self.subTest(row=row):
+                self.assert_parse_error(path, 1)
+
+    def test_overflowing_json_number_is_a_parse_error(self) -> None:
+        # 1e999 parses to inf under Python's json defaults; it is still not a legal weight.
+        path = self.write_raw('{"source": "a", "target": "b", "weight": 1e999}\n')
+        self.assert_parse_error(path, 1)
+
+    def test_stdin_reports_non_finite_weights_with_their_line(self) -> None:
+        text = (
+            '{"source": "a", "target": "b", "weight": 2}\n'
+            '{"source": "b", "target": "c", "weight": Infinity}\n'
+        )
+        out, err = io.StringIO(), io.StringIO()
+        stdin = io.StringIO(text)
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), unittest.mock.patch.object(sys, "stdin", stdin):
+            code = main(["stats", "--edges", "-"])
+        self.assertEqual(code, EXIT_ERROR)
+        self.assertEqual(out.getvalue(), "")
+        document = json.loads(err.getvalue())
+        self.assertEqual(document["error"], "parse_error")
+        self.assertEqual(document["line"], 2)
+
+    def test_legal_extreme_weights_still_flow_through(self) -> None:
+        path = self.write_raw(
+            '{"source": "a", "target": "b", "weight": 0}\n'
+            '{"source": "b", "target": "c", "weight": -2.5}\n'
+            '{"source": "c", "target": "d", "weight": 1e300}\n'
+            '{"source": "d", "target": "e", "weight": -1e-300}\n'
+        )
+        code, out, err = run_cli(["stats", "--edges", path])
+        self.assertEqual((code, err), (EXIT_OK, ""))
+        document = json.loads(out)
+        self.assertEqual(document["edges"], 4)
+        self.assertTrue(document["negativeWeights"])
+
+    def test_legal_weighted_graph_results_are_unchanged(self) -> None:
+        path = self.write_raw(
+            '{"source": "a", "target": "b", "weight": 1}\n'
+            '{"source": "b", "target": "c", "weight": 2}\n'
+            '{"source": "a", "target": "c", "weight": 5}\n'
+        )
+        code, out, _ = run_cli(["dijkstra", "--edges", path, "--directed", "--source", "a", "--target", "c"])
+        self.assertEqual(code, EXIT_OK)
+        document = json.loads(out)
+        self.assertEqual(document["distance"], 3.0)
+        self.assertEqual(document["path"], ["a", "b", "c"])
+        code, out, _ = run_cli(["compare", "--edges", path, "--directed", "--source", "a"])
+        self.assertEqual(code, EXIT_OK)
+        self.assertTrue(json.loads(out)["identical"])
+
+
 if __name__ == "__main__":
     unittest.main()

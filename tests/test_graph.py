@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import unittest
 
 from graphtk import (
@@ -78,6 +79,118 @@ class GraphTests(unittest.TestCase):
         document = graph.to_document()
         self.assertEqual(document["selfLoops"], ["a"])
         self.assertTrue(document["negativeWeights"])
+
+
+class WeightValidationTests(unittest.TestCase):
+    """Every public construction entry point applies one rule: finite int/float only."""
+
+    BAD_WEIGHTS = [True, False, "1.5", "0", None, math.nan, math.inf, -math.inf]
+
+    def test_edge_rejects_every_non_finite_or_non_numeric_weight(self) -> None:
+        for weight in self.BAD_WEIGHTS:
+            with self.subTest(weight=weight), self.assertRaises(ValidationError) as caught:
+                Edge("a", "b", weight)  # type: ignore[arg-type]
+            self.assertEqual(caught.exception.kind, "validation_error")
+
+    def test_add_edge_rejects_every_non_finite_or_non_numeric_weight(self) -> None:
+        for weight in self.BAD_WEIGHTS:
+            graph = Graph()
+            with self.subTest(weight=weight), self.assertRaises(ValidationError):
+                graph.add_edge("a", "b", weight)  # type: ignore[arg-type]
+
+    def test_a_rejected_weight_adds_no_nodes_or_edges(self) -> None:
+        for directed in (False, True):
+            graph = Graph(directed=directed)
+            with self.assertRaises(ValidationError):
+                graph.add_edge("x", "y", math.nan)
+            self.assertEqual(graph.nodes(), [])
+            self.assertEqual(graph.edge_count(), 0)
+
+    def test_a_rejected_weight_never_overwrites_an_existing_edge(self) -> None:
+        graph = Graph()
+        graph.add_edge("a", "b", 2.0)
+        with self.assertRaises(ValidationError):
+            graph.add_edge("a", "b", math.inf)
+        self.assertEqual(dict(graph.neighbors("a")), {"b": 2.0})
+        self.assertEqual(dict(graph.neighbors("b")), {"a": 2.0})
+
+    def test_a_rejected_weight_leaves_no_half_of_an_undirected_edge(self) -> None:
+        graph = Graph()
+        graph.add_node("a")
+        with self.assertRaises(ValidationError):
+            graph.add_edge("a", "b", -math.inf)
+        self.assertEqual(graph.nodes(), ["a"])
+        self.assertEqual(graph.neighbors("a"), [])
+
+    def test_legal_weights_still_work(self) -> None:
+        graph = Graph()
+        graph.add_edge("a", "b", 0)
+        graph.add_edge("b", "c", -2.5)
+        graph.add_edge("c", "d", 1e300)
+        graph.add_edge("d", "e", -1e-300)
+        self.assertEqual(dict(graph.neighbors("a")), {"b": 0.0})
+        self.assertEqual(dict(graph.neighbors("b"))["c"], -2.5)
+        self.assertEqual(dict(graph.neighbors("c"))["d"], 1e300)
+        self.assertEqual(dict(graph.neighbors("d"))["e"], -1e-300)
+
+    def test_int_weights_are_normalised_to_float(self) -> None:
+        graph = Graph()
+        graph.add_edge("a", "b", 3)
+        weight = dict(graph.neighbors("a"))["b"]
+        self.assertEqual(weight, 3.0)
+        self.assertIsInstance(weight, float)
+
+    def test_undirected_edge_stores_the_same_weight_on_both_sides(self) -> None:
+        graph = Graph()
+        graph.add_edge("a", "b", 7)
+        self.assertEqual(dict(graph.neighbors("a"))["b"], 7.0)
+        self.assertEqual(dict(graph.neighbors("b"))["a"], 7.0)
+
+    def test_a_legal_duplicate_still_updates_the_weight(self) -> None:
+        graph = Graph()
+        graph.add_edge("a", "b", 1.0)
+        graph.add_edge("a", "b", -4)
+        self.assertEqual(dict(graph.neighbors("a"))["b"], -4.0)
+        self.assertEqual(dict(graph.neighbors("b"))["a"], -4.0)
+
+    def test_incremental_add_edge_rejects_bad_weights_without_side_effects(self) -> None:
+        for weight in self.BAD_WEIGHTS:
+            graph = Graph()
+            graph.add_edge("a", "b", 1.0)
+            state = IncrementalComponents(graph)
+            revision_before = state.revision
+            with self.subTest(weight=weight), self.assertRaises(ValidationError):
+                state.add_edge("c", "d", weight)  # type: ignore[arg-type]
+            self.assertEqual(state.graph.nodes(), ["a", "b"])
+            self.assertEqual(state.graph.edge_count(), 1)
+            self.assertEqual(state.revision, revision_before)
+            self.assertFalse(state.is_stale)
+            self.assertEqual(state.stale_nodes(), [])
+            self.assertEqual(state.component_count(), 1)
+
+    def test_incremental_rejection_preserves_staleness_and_union_find(self) -> None:
+        graph = Graph()
+        graph.add_edge("a", "b")
+        graph.add_edge("b", "c")
+        state = IncrementalComponents(graph)
+        self.assertTrue(state.remove_edge("a", "b"))
+        revision_before = state.revision
+        with self.assertRaises(ValidationError):
+            state.add_edge("a", "b", math.nan)
+        self.assertEqual(state.revision, revision_before)
+        self.assertTrue(state.is_stale)
+        self.assertEqual(state.stale_nodes(), ["a", "b"])
+        # The union-find labelling is untouched: the graph still has no a-b edge.
+        self.assertEqual(components(state.graph), [["a"], ["b", "c"]])
+
+    def test_incremental_add_edge_accepts_legal_negative_and_zero_weights(self) -> None:
+        graph = Graph()
+        graph.add_edge("a", "b")
+        state = IncrementalComponents(graph)
+        self.assertTrue(state.add_edge("b", "c", -3))
+        self.assertTrue(state.add_edge("c", "d", 0.0))
+        self.assertEqual(state.component_count(), 1)
+        self.assertEqual(dict(state.graph.neighbors("b"))["c"], -3.0)
 
 
 class TraversalTests(unittest.TestCase):

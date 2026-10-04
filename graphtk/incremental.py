@@ -37,6 +37,7 @@ class IncrementalComponents:
     # -- union-find ------------------------------------------------------------------------------
     def _find(self, node: str) -> str:
         self._parent.setdefault(node, node)
+        self._rank.setdefault(node, 0)
         while self._parent[node] != node:
             self._parent[node] = self._parent[self._parent[node]]
             node = self._parent[node]
@@ -55,12 +56,15 @@ class IncrementalComponents:
 
     # -- maintenance -----------------------------------------------------------------------------
     def add_edge(self, source: str, target: str, weight: float = 1.0) -> bool:
-        """Insert an edge; returns True when two components merged."""
+        """Insert an edge; returns True when two components merged.
+
+        Insertion never clears staleness. A removal may have split any part of the graph, and a
+        single merge -- even re-adding the removed edge -- is not proof the labelling matches the
+        whole graph again; only ``recompute`` can confirm that.
+        """
         self.graph.add_edge(source, target, weight)
         merged = self._union(source, target)
         self.revision += 1
-        if merged:
-            self._stale.clear()
         return merged
 
     def remove_edge(self, source: str, target: str) -> bool:

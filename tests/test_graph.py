@@ -217,6 +217,127 @@ class IncrementalTests(unittest.TestCase):
         self.assertFalse(state.is_stale)
         self.assertEqual(state.component_count(), 2)
 
+    def test_staleness_survives_the_full_interleaved_sequence(self) -> None:
+        graph = Graph()
+        graph.add_edge("a", "b")
+        graph.add_edge("b", "c")
+        graph.add_edge("d", "e")
+        state = IncrementalComponents(graph)
+        self.assertEqual(state.revision, 1)
+        self.assertFalse(state.is_stale)
+
+        # A successful removal marks its sorted endpoints stale and bumps the revision.
+        self.assertTrue(state.remove_edge("b", "c"))
+        self.assertEqual(state.revision, 2)
+        self.assertTrue(state.is_stale)
+        self.assertEqual(state.stale_nodes(), ["b", "c"])
+        with self.assertRaises(ValidationError):
+            state.labels()
+        with self.assertRaises(ValidationError):
+            state.component_count()
+        document = state.to_document()
+        self.assertTrue(document["stale"])
+        self.assertNotIn("components", document)
+
+        # A merging insertion (new node f joins the d-e component) completes the graph update and
+        # returns the union's verdict, but must not clear or overwrite the stale markers.
+        self.assertTrue(state.add_edge("e", "f"))
+        self.assertEqual(state.revision, 3)
+        self.assertEqual(components(state.graph), [["a", "b"], ["c"], ["d", "e", "f"]])
+        self.assertTrue(state.is_stale)
+        self.assertEqual(state.stale_nodes(), ["b", "c"])
+        with self.assertRaises(ValidationError):
+            state.labels()
+        with self.assertRaises(ValidationError):
+            state.component_count()
+        document = state.to_document()
+        self.assertTrue(document["stale"])
+        self.assertNotIn("components", document)
+
+        # Removing a missing edge returns False and changes neither revision nor the stale set.
+        self.assertFalse(state.remove_edge("x", "y"))
+        self.assertEqual(state.revision, 3)
+        self.assertEqual(state.stale_nodes(), ["b", "c"])
+
+        # A second successful removal while stale unions its endpoints into the stale set.
+        self.assertTrue(state.remove_edge("a", "b"))
+        self.assertEqual(state.revision, 4)
+        self.assertEqual(state.stale_nodes(), ["a", "b", "c"])
+
+        # recompute rebuilds from the graph as it stands, including every change made while stale.
+        state.recompute()
+        self.assertEqual(state.revision, 5)
+        self.assertFalse(state.is_stale)
+        self.assertEqual(state.stale_nodes(), [])
+        groups = components(state.graph)
+        self.assertEqual(groups, [["a"], ["b"], ["c"], ["d", "e", "f"]])
+        expected_labels = {node: group[0] for group in groups for node in group}
+        self.assertEqual(state.labels(), expected_labels)
+        self.assertEqual(state.component_count(), len(groups))
+        document = state.to_document()
+        self.assertFalse(document["stale"])
+        self.assertEqual(document["components"], 4)
+
+    def test_a_merging_insertion_after_a_removal_cannot_clear_staleness(self) -> None:
+        graph = Graph()
+        graph.add_edge("a", "b")
+        graph.add_edge("b", "c")
+        graph.add_edge("d", "e")
+        state = IncrementalComponents(graph)
+        self.assertTrue(state.remove_edge("b", "c"))
+        # The union-find still believes b and c share a set, but c-d genuinely joins two distinct
+        # union-find trees ({a,b,c} and {d,e}), so the merge reports True -- exactly the event the
+        # old code treated as proof everything was current and wiped the stale markers.
+        self.assertTrue(state.add_edge("c", "d"))
+        self.assertTrue(state.is_stale)
+        self.assertEqual(state.stale_nodes(), ["b", "c"])
+        with self.assertRaises(ValidationError):
+            state.component_count()
+        state.recompute()
+        self.assertFalse(state.is_stale)
+        self.assertEqual(components(state.graph), [["a", "b"], ["c", "d", "e"]])
+        self.assertEqual(state.component_count(), 2)
+        self.assertEqual(set(state.labels().values()), {"a", "c"})
+
+    def test_re_adding_the_removed_edge_does_not_heal_staleness(self) -> None:
+        graph = Graph()
+        for source, target in (("a", "b"), ("b", "c"), ("a", "c")):
+            graph.add_edge(source, target)
+        state = IncrementalComponents(graph)
+        self.assertTrue(state.remove_edge("a", "b"))
+        # The graph stays connected through c, so the union reports no merge -- either way, an
+        # insertion is never an implicit recompute.
+        self.assertFalse(state.add_edge("a", "b"))
+        self.assertTrue(state.is_stale)
+        self.assertEqual(state.stale_nodes(), ["a", "b"])
+        state.recompute()
+        self.assertFalse(state.is_stale)
+        self.assertEqual(state.component_count(), 1)
+
+    def test_revision_accounting_and_insertion_return_semantics(self) -> None:
+        graph = Graph()
+        graph.add_edge("a", "b")
+        state = IncrementalComponents(graph)
+        self.assertEqual(state.revision, 1)
+        # An intra-component edge (here a duplicate) reports no merge but is still a revision.
+        self.assertFalse(state.add_edge("a", "b"))
+        self.assertEqual(state.revision, 2)
+        self.assertTrue(state.add_edge("b", "c"))
+        self.assertEqual(state.revision, 3)
+        # A failed removal is a no-op.
+        self.assertFalse(state.remove_edge("a", "z"))
+        self.assertEqual(state.revision, 3)
+        self.assertTrue(state.remove_edge("a", "b"))
+        self.assertEqual(state.revision, 4)
+        # A non-merging insertion while stale still bumps the revision and leaves staleness standing.
+        self.assertFalse(state.add_edge("a", "b"))
+        self.assertEqual(state.revision, 5)
+        self.assertTrue(state.is_stale)
+        self.assertEqual(state.stale_nodes(), ["a", "b"])
+        state.recompute()
+        self.assertEqual(state.revision, 6)
+        self.assertFalse(state.is_stale)
+
     def test_directed_graphs_are_refused(self) -> None:
         with self.assertRaises(ValidationError):
             IncrementalComponents(Graph(directed=True))

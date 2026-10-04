@@ -61,7 +61,9 @@ Graphs are **undirected unless `--directed` is passed**.
 * **Incremental labelling is honest.** `IncrementalComponents` merges components on insertion in
   near-constant time; a **removal** cannot be undone by union-find, so the structure marks itself stale,
   names the affected nodes, and makes `labels()` fail until `recompute()` is called instead of returning
-  a quietly wrong answer.
+  a quietly wrong answer. No insertion clears that state — not an edge between unrelated components,
+  not an edge with a new node, and not re-adding the edge just removed — because one merge can never
+  vouch for the whole graph; only `recompute()` rebuilds from the graph as it currently stands.
 
 ## Layout
 

@@ -1,4 +1,4 @@
-"""Graph algorithms: traversal, shortest paths, components, ordering, PageRank, centrality.
+"""Graph algorithms: traversal, shortest paths, components, ordering, PageRank, centrality, clustering.
 
 Every function is deterministic (sorted iteration), reports unreachable nodes explicitly rather than
 inventing a distance, and raises a typed error with evidence when the input makes the answer
@@ -223,3 +223,66 @@ def degree_centrality(graph: Graph) -> dict[str, float]:
         return {node: 0.0 for node in graph.nodes()}
     denominator = float(total - 1)
     return {node: round(graph.degree(node) / denominator, 10) for node in graph.nodes()}
+
+
+@dataclass(frozen=True, slots=True)
+class ClusteringResult:
+    coefficients: dict[str, float]
+    average: float
+    transitivity: float
+    triangles: int
+    connected_triples: int
+
+    def to_document(self) -> dict[str, object]:
+        return {
+            "coefficients": {node: self.coefficients[node] for node in sorted(self.coefficients)},
+            "average": self.average,
+            "transitivity": self.transitivity,
+            "triangles": self.triangles,
+            "connectedTriples": self.connected_triples,
+            "nodes": len(self.coefficients),
+        }
+
+
+def clustering(graph: Graph) -> ClusteringResult:
+    """Local clustering coefficients, their average, and the global transitivity.
+
+    Everything is measured on a simple undirected reading of the graph: an edge in either direction
+    counts once, weights and duplicate adjacencies are ignored, and self-loops are neighbours of
+    nobody. Every node -- including isolated ones -- is present in the result and counts towards the
+    average. Each unordered triangle is counted once; a connected triple (wedge) is counted at its
+    centre as a pair of distinct neighbours. All iteration is sorted, so the answer never depends on
+    insertion order or set traversal.
+    """
+    # Built directly instead of via _as_undirected: that helper mirrors edges only, so an isolated
+    # node in a directed graph would silently drop out of the average.
+    adjacency: dict[str, set[str]] = {node: set() for node in graph.nodes()}
+    for edge in graph.edges():
+        if edge.source == edge.target:
+            continue
+        adjacency[edge.source].add(edge.target)
+        adjacency[edge.target].add(edge.source)
+    nodes = sorted(adjacency)
+    coefficients: dict[str, float] = {}
+    coefficient_sum = 0.0
+    closed_pairs = 0
+    wedges = 0
+    for node in nodes:
+        neighbours = sorted(adjacency[node])
+        degree = len(neighbours)
+        pairs = degree * (degree - 1) // 2
+        if degree < 2:
+            coefficients[node] = 0.0
+            continue
+        # A linked pair of neighbours closes one wedge at this node; each triangle contributes at all
+        # three of its vertices, so the total is three times the triangle count.
+        between = sum(1 for index, left in enumerate(neighbours) for right in neighbours[index + 1 :] if right in adjacency[left])
+        value = between / pairs
+        coefficients[node] = round(value, 10)
+        coefficient_sum += value
+        closed_pairs += between
+        wedges += pairs
+    triangles = closed_pairs // 3
+    average = round(coefficient_sum / len(nodes), 10) if nodes else 0.0
+    transitivity = round(3 * triangles / wedges, 10) if wedges else 0.0
+    return ClusteringResult(coefficients, average, transitivity, triangles, wedges)

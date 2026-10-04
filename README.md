@@ -1,7 +1,7 @@
 # graph-computation-toolkit
 
-Graph construction, traversal, shortest paths, components, ordering, ranking and incremental
-components (Python standard library only).
+Graph construction, traversal, shortest paths, components, ordering, ranking, clustering and
+incremental components (Python standard library only).
 
 ## Install and entry point
 
@@ -40,6 +40,7 @@ Graphs are **undirected unless `--directed` is passed**.
 | `toposort` | topological order (**requires `--directed`**) | 0 / 2 |
 | `pagerank [--damping] [--tolerance]` | power iteration with explicit convergence reporting | 0 / **3** (not converged) / 2 |
 | `centrality` | normalised degree centrality | 0 / **3** / 2 |
+| `clustering` | local clustering coefficients, average, transitivity, triangle and wedge counts | 0 / **3** (empty) / 2 |
 | `compare --source S` | run Dijkstra **and** Bellman-Ford and check they agree | 0 / **3** (disagree) / 2 |
 
 `--edges -` reads from stdin.
@@ -58,6 +59,12 @@ Graphs are **undirected unless `--directed` is passed**.
 * **Two implementations must agree.** `compare` is the guarantee: Dijkstra and Bellman-Ford are
   independent code paths, and the command reports `identical`, the node count compared, both reachable
   counts, and every differing node — exiting **3** when they disagree.
+* **Clustering is measured on one simple undirected view.** `clustering` returns each node's local
+  coefficient (edges between its distinct neighbours over `k(k−1)/2`, `0` when `k < 2`), the average
+  over **all** nodes, the transitivity (`3·triangles / connectedTriples`, `0` when the denominator is
+  zero), and the triangle and connected-triple counts. An edge in either direction counts once, mutual
+  arcs and duplicate input still make a single adjacency, weights are ignored, and a self-loop is never
+  a neighbour or a triangle edge — so the document is identical for the same edges in any order.
 * **Incremental labelling is honest.** `IncrementalComponents` merges components on insertion in
   near-constant time; a **removal** cannot be undone by union-find, so the structure marks itself stale,
   names the affected nodes, and makes `labels()` fail until `recompute()` is called instead of returning
@@ -69,8 +76,8 @@ Graphs are **undirected unless `--directed` is passed**.
 
 ```
 graphtk/graph.py        graph, edges, CSR, degrees, diagnostics
-graphtk/algorithms.py   BFS/DFS, Dijkstra, Bellman-Ford, components, topological sort, PageRank, centrality
+graphtk/algorithms.py   BFS/DFS, Dijkstra, Bellman-Ford, components, topological sort, PageRank, centrality, clustering
 graphtk/incremental.py  union-find components with staleness tracking
-graphtk/cli.py          eleven subcommands and the exit-code contract
-tests/                  structure, traversal, shortest paths, ordering, ranking, incremental behaviour
+graphtk/cli.py          twelve subcommands and the exit-code contract
+tests/                  structure, traversal, shortest paths, ordering, ranking, clustering, incremental behaviour
 ```

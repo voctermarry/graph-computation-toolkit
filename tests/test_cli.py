@@ -6,8 +6,10 @@ import contextlib
 import io
 import json
 import os
+import sys
 import tempfile
 import unittest
+import unittest.mock
 
 from graphtk.cli import EXIT_ERROR, EXIT_NEGATIVE, EXIT_OK, main
 
@@ -119,6 +121,102 @@ class CLITests(unittest.TestCase):
         code, out, _ = run_cli(["centrality", "--edges", self.edges])
         self.assertEqual(code, EXIT_OK)
         self.assertGreater(json.loads(out)["centrality"]["b"], 0.0)
+
+    def test_clustering_reports_the_closed_triangle_and_open_wedges(self) -> None:
+        code, out, _ = run_cli(["clustering", "--edges", self.edges])
+        self.assertEqual(code, EXIT_OK)
+        document = json.loads(out)
+        # EDGES (undirected): a-b, b-c, a-c form a triangle; c-d hangs off it.
+        self.assertEqual(document["triangles"], 1)
+        self.assertEqual(document["connectedTriples"], 5)
+        self.assertEqual(document["transitivity"], 0.6)
+        self.assertAlmostEqual(document["average"], 7 / 12, places=10)
+        self.assertAlmostEqual(document["coefficients"]["c"], 1 / 3, places=10)
+        self.assertEqual(document["coefficients"]["d"], 0.0)
+        self.assertEqual(document["nodes"], 4)
+        self.assertEqual(list(document["coefficients"]), ["a", "b", "c", "d"])
+
+    def test_clustering_has_ten_decimal_output_convention(self) -> None:
+        code, out, _ = run_cli(["clustering", "--edges", self.edges])
+        self.assertEqual(code, EXIT_OK)
+        document = json.loads(out)
+        self.assertEqual(document["coefficients"]["c"], 0.3333333333)
+
+    def test_clustering_directed_collapses_mutual_arcs(self) -> None:
+        rows = [
+            {"source": "a", "target": "b"},
+            {"source": "b", "target": "a"},
+            {"source": "b", "target": "c"},
+            {"source": "c", "target": "b"},
+            {"source": "a", "target": "c"},
+        ]
+        directed = self.write_edges(rows, "directed.jsonl")
+        undirected = self.write_edges(
+            [{"source": "a", "target": "b"}, {"source": "b", "target": "c"}, {"source": "a", "target": "c"}],
+            "undirected.jsonl",
+        )
+        code_d, out_d, err_d = run_cli(["clustering", "--edges", directed, "--directed"])
+        code_u, out_u, _ = run_cli(["clustering", "--edges", undirected])
+        self.assertEqual((code_d, err_d, code_u), (EXIT_OK, "", EXIT_OK))
+        self.assertEqual(json.loads(out_d), json.loads(out_u))
+
+    def test_clustering_is_identical_for_different_insertion_orders(self) -> None:
+        rows = [
+            {"source": "a", "target": "b", "weight": 2},
+            {"source": "c", "target": "b"},
+            {"source": "a", "target": "c"},
+            {"source": "a", "target": "a"},
+            {"source": "c", "target": "d", "weight": -1},
+        ]
+        first = self.write_edges(rows, "first.jsonl")
+        second = self.write_edges(list(reversed(rows)), "second.jsonl")
+        code_a, out_a, _ = run_cli(["clustering", "--edges", first, "--directed"])
+        code_b, out_b, _ = run_cli(["clustering", "--edges", second, "--directed"])
+        self.assertEqual((code_a, code_b), (EXIT_OK, EXIT_OK))
+        self.assertEqual(out_a, out_b)
+
+    def test_clustering_reads_stdin(self) -> None:
+        text = "".join(json.dumps(edge) + "\n" for edge in EDGES)
+        out, err = io.StringIO(), io.StringIO()
+        stdin = io.StringIO(text)
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), unittest.mock.patch.object(sys, "stdin", stdin):
+            code = main(["clustering", "--edges", "-"])
+        self.assertEqual((code, err.getvalue()), (EXIT_OK, ""))
+        self.assertEqual(json.loads(out.getvalue())["triangles"], 1)
+
+    def test_clustering_empty_graph_is_a_full_zero_document_with_code_three(self) -> None:
+        empty = os.path.join(self.directory.name, "empty.jsonl")
+        with open(empty, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write("# just a comment\n\n")
+        code, out, err = run_cli(["clustering", "--edges", empty])
+        self.assertEqual((code, err), (EXIT_NEGATIVE, ""))
+        self.assertEqual(
+            json.loads(out),
+            {
+                "average": 0.0,
+                "coefficients": {},
+                "connectedTriples": 0,
+                "nodes": 0,
+                "transitivity": 0.0,
+                "triangles": 0,
+            },
+        )
+
+    def test_clustering_parse_and_file_errors_stay_code_two(self) -> None:
+        broken = self.write_edges([{"source": "a", "target": "b"}])
+        with open(broken, "a", encoding="utf-8", newline="\n") as handle:
+            handle.write("not json\n")
+        code, _, err = run_cli(["clustering", "--edges", broken])
+        self.assertEqual(code, EXIT_ERROR)
+        self.assertEqual(json.loads(err)["error"], "parse_error")
+        code, _, err = run_cli(["clustering", "--edges", os.path.join(self.directory.name, "missing.jsonl")])
+        self.assertEqual(code, EXIT_ERROR)
+        self.assertEqual(json.loads(err)["error"], "validation_error")
+
+    def test_describe_publishes_clustering(self) -> None:
+        code, out, _ = run_cli(["describe"])
+        self.assertEqual(code, EXIT_OK)
+        self.assertIn("clustering", json.loads(out)["subcommands"])
 
     def test_compare_agrees_between_the_two_shortest_path_algorithms(self) -> None:
         code, out, _ = run_cli(["compare", "--edges", self.edges, "--directed", "--source", "a"])

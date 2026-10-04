@@ -13,6 +13,7 @@ from graphtk import (
     ValidationError,
     bellman_ford,
     bfs,
+    clustering,
     components,
     degree_centrality,
     dfs,
@@ -190,6 +191,200 @@ class RankingTests(unittest.TestCase):
         centrality = degree_centrality(sample())
         self.assertAlmostEqual(centrality["a"], 2 / 4)
         self.assertAlmostEqual(centrality["d"], 1 / 4)
+
+
+class ClusteringTests(unittest.TestCase):
+    def test_a_triangle_is_fully_closed(self) -> None:
+        graph = Graph()
+        for source, target in (("a", "b"), ("b", "c"), ("c", "a")):
+            graph.add_edge(source, target)
+        result = clustering(graph)
+        self.assertEqual(result.coefficients, {"a": 1.0, "b": 1.0, "c": 1.0})
+        self.assertEqual(result.average, 1.0)
+        self.assertEqual(result.transitivity, 1.0)
+        self.assertEqual(result.triangles, 1)
+        self.assertEqual(result.connected_triples, 3)
+
+    def test_an_open_wedge_scores_zero_but_still_counts_as_a_triple(self) -> None:
+        graph = Graph()
+        graph.add_edge("a", "b")
+        graph.add_edge("b", "c")
+        result = clustering(graph)
+        self.assertEqual(result.coefficients, {"a": 0.0, "b": 0.0, "c": 0.0})
+        self.assertEqual(result.average, 0.0)
+        self.assertEqual(result.transitivity, 0.0)
+        self.assertEqual(result.triangles, 0)
+        self.assertEqual(result.connected_triples, 1)
+
+    def test_triangle_with_a_tail_mixes_closed_and_open_centres(self) -> None:
+        graph = Graph()
+        for source, target in (("a", "b"), ("b", "c"), ("c", "a"), ("c", "d")):
+            graph.add_edge(source, target)
+        result = clustering(graph)
+        self.assertEqual(result.coefficients, {"a": 1.0, "b": 1.0, "c": round(1 / 3, 10), "d": 0.0})
+        self.assertEqual(result.average, round(7 / 12, 10))
+        self.assertEqual(result.transitivity, 0.6)
+        self.assertEqual(result.triangles, 1)
+        self.assertEqual(result.connected_triples, 5)
+
+    def test_diamond_has_two_triangles_and_eight_triples(self) -> None:
+        graph = Graph()
+        for source, target in (("a", "b"), ("a", "c"), ("b", "c"), ("b", "d"), ("c", "d")):
+            graph.add_edge(source, target)
+        result = clustering(graph)
+        self.assertEqual(result.coefficients["a"], 1.0)
+        self.assertEqual(result.coefficients["d"], 1.0)
+        self.assertEqual(result.coefficients["b"], round(2 / 3, 10))
+        self.assertEqual(result.coefficients["c"], round(2 / 3, 10))
+        self.assertEqual(result.average, round(5 / 6, 10))
+        self.assertEqual(result.transitivity, 0.75)
+        self.assertEqual(result.triangles, 2)
+        self.assertEqual(result.connected_triples, 8)
+
+    def test_nodes_with_fewer_than_two_neighbours_and_isolated_nodes_are_zero(self) -> None:
+        graph = Graph()
+        graph.add_edge("a", "b")
+        graph.add_node("z")
+        result = clustering(graph)
+        self.assertEqual(result.coefficients, {"a": 0.0, "b": 0.0, "z": 0.0})
+        self.assertEqual(result.average, 0.0)
+        self.assertEqual(result.triangles, 0)
+        self.assertEqual(result.connected_triples, 0)
+
+    def test_complete_graph_of_four_counts_every_triangle_once(self) -> None:
+        graph = Graph()
+        nodes = ["a", "b", "c", "d"]
+        for index, left in enumerate(nodes):
+            for right in nodes[index + 1 :]:
+                graph.add_edge(left, right)
+        result = clustering(graph)
+        self.assertEqual(set(result.coefficients.values()), {1.0})
+        self.assertEqual(result.average, 1.0)
+        self.assertEqual(result.transitivity, 1.0)
+        self.assertEqual(result.triangles, 4)
+        self.assertEqual(result.connected_triples, 12)
+
+    def test_self_loops_are_neither_neighbours_nor_triangles(self) -> None:
+        graph = Graph()
+        graph.add_edge("a", "a")
+        graph.add_edge("a", "b")
+        graph.add_edge("b", "c")
+        graph.add_edge("a", "c")
+        result = clustering(graph)
+        self.assertEqual(result.coefficients, {"a": 1.0, "b": 1.0, "c": 1.0})
+        self.assertEqual(result.triangles, 1)
+        self.assertEqual(result.connected_triples, 3)
+
+        only_loop = Graph()
+        only_loop.add_edge("a", "a")
+        alone = clustering(only_loop)
+        self.assertEqual(alone.coefficients, {"a": 0.0})
+        self.assertEqual(alone.triangles, 0)
+        self.assertEqual(alone.connected_triples, 0)
+        self.assertEqual(alone.average, 0.0)
+        self.assertEqual(alone.transitivity, 0.0)
+
+    def test_weights_do_not_participate(self) -> None:
+        weighted = Graph()
+        for source, target, weight in (("a", "b", 9.5), ("b", "c", -3.0), ("c", "a", 0.25)):
+            weighted.add_edge(source, target, weight)
+        plain = Graph()
+        for source, target in (("a", "b"), ("b", "c"), ("c", "a")):
+            plain.add_edge(source, target)
+        self.assertEqual(clustering(weighted).to_document(), clustering(plain).to_document())
+
+    def test_duplicate_undirected_input_is_one_adjacency(self) -> None:
+        graph = Graph()
+        graph.add_edge("a", "b", 1.0)
+        graph.add_edge("a", "b", 4.0)
+        graph.add_edge("b", "a", 2.0)
+        result = clustering(graph)
+        self.assertEqual(result.coefficients, {"a": 0.0, "b": 0.0})
+        self.assertEqual(result.connected_triples, 0)
+
+    def test_directed_graph_uses_one_simple_undirected_reading(self) -> None:
+        # One-way arcs arranged around a cycle still close one triangle in the undirected reading.
+        cycle = Graph(directed=True)
+        for source, target in (("a", "b"), ("b", "c"), ("c", "a")):
+            cycle.add_edge(source, target)
+        result = clustering(cycle)
+        self.assertEqual(result.coefficients, {"a": 1.0, "b": 1.0, "c": 1.0})
+        self.assertEqual(result.triangles, 1)
+        self.assertEqual(result.connected_triples, 3)
+
+        # A single directed arc and a mutual pair must both look like exactly one undirected edge.
+        single = Graph(directed=True)
+        single.add_edge("a", "b")
+        mutual = Graph(directed=True)
+        mutual.add_edge("a", "b")
+        mutual.add_edge("b", "a")
+        self.assertEqual(clustering(single).to_document(), clustering(mutual).to_document())
+        self.assertEqual(clustering(mutual).connected_triples, 0)
+
+    def test_insertion_order_cannot_change_any_value(self) -> None:
+        rows = [
+            ("a", "b"),
+            ("b", "a"),
+            ("b", "c"),
+            ("c", "b"),
+            ("a", "c"),
+            ("c", "d"),
+            ("a", "a"),
+        ]
+        def build(order: list[int]) -> Graph:
+            graph = Graph(directed=True)
+            for index in order:
+                graph.add_edge(*rows[index])
+            return graph
+
+        orders = [
+            list(range(len(rows))),
+            list(reversed(range(len(rows)))),
+            [6, 0, 3, 5, 1, 4, 2],
+            [2, 5, 4, 1, 6, 0, 3],
+        ]
+        documents = [clustering(build(order)).to_document() for order in orders]
+        reference = documents[0]
+        for document in documents[1:]:
+            self.assertEqual(document, reference)
+        self.assertEqual(reference["triangles"], 1)
+        self.assertEqual(reference["connectedTriples"], 5)
+        self.assertEqual(list(reference["coefficients"]), ["a", "b", "c", "d"])
+
+    def test_isolated_nodes_are_kept_in_a_directed_graph(self) -> None:
+        # A node without incident arcs must survive the undirected reading and count in the average.
+        graph = Graph(directed=True)
+        for source, target in (("a", "b"), ("b", "c"), ("c", "a")):
+            graph.add_edge(source, target)
+        graph.add_node("z")
+        result = clustering(graph)
+        self.assertEqual(result.coefficients, {"a": 1.0, "b": 1.0, "c": 1.0, "z": 0.0})
+        self.assertEqual(result.average, 0.75)
+        self.assertEqual(result.triangles, 1)
+        self.assertEqual(result.connected_triples, 3)
+
+    def test_empty_graph_is_a_complete_zero_document(self) -> None:
+        result = clustering(Graph())
+        self.assertEqual(
+            result.to_document(),
+            {
+                "coefficients": {},
+                "average": 0.0,
+                "transitivity": 0.0,
+                "triangles": 0,
+                "connectedTriples": 0,
+                "nodes": 0,
+            },
+        )
+
+    def test_document_is_sorted_and_rounded_to_ten_decimals(self) -> None:
+        graph = Graph()
+        for source, target in (("a", "b"), ("b", "c"), ("c", "a"), ("c", "d")):
+            graph.add_edge(source, target)
+        document = clustering(graph).to_document()
+        self.assertEqual(list(document["coefficients"]), ["a", "b", "c", "d"])
+        self.assertEqual(document["coefficients"]["c"], 0.3333333333)
+        self.assertEqual(document["nodes"], 4)
 
 
 class IncrementalTests(unittest.TestCase):

@@ -17,6 +17,7 @@ from . import __version__
 from .algorithms import (
     bellman_ford,
     bfs,
+    clustering,
     components,
     degree_centrality,
     dfs,
@@ -91,6 +92,7 @@ def _command_describe(_: argparse.Namespace) -> int:
                 "bellman-ford",
                 "bfs",
                 "centrality",
+                "clustering",
                 "compare",
                 "components",
                 "describe",
@@ -182,6 +184,12 @@ def _command_centrality(args: argparse.Namespace) -> int:
     return EXIT_OK if graph.node_count else EXIT_NEGATIVE
 
 
+def _command_clustering(args: argparse.Namespace) -> int:
+    graph = _graph_from(args)
+    _emit(clustering(graph).to_document())
+    return EXIT_OK if graph.node_count else EXIT_NEGATIVE
+
+
 def _command_compare(args: argparse.Namespace) -> int:
     """Two independent shortest-path implementations over the same graph must agree exactly."""
     graph = _graph_from(args)
@@ -245,6 +253,8 @@ def build_parser() -> argparse.ArgumentParser:
     pagerank_command.set_defaults(handler=_command_pagerank)
 
     with_graph("centrality", "normalised degree centrality").set_defaults(handler=_command_centrality)
+
+    with_graph("clustering", "local clustering coefficients, average and transitivity").set_defaults(handler=_command_clustering)
 
     compare_command = with_graph("compare", "run two shortest-path algorithms and check they agree")
     compare_command.add_argument("--source", required=True)

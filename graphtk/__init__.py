@@ -1,8 +1,9 @@
-"""Graph construction, traversal, shortest paths, centrality, clustering and incremental updates."""
+"""Graph construction, traversal, shortest paths, centrality, clustering, communities and incremental updates."""
 
 from .algorithms import (
     INFINITY,
     ClusteringResult,
+    CommunitiesResult,
     PageRankResult,
     astar,
     bellman_ford,
@@ -12,6 +13,7 @@ from .algorithms import (
     degree_centrality,
     dfs,
     dijkstra,
+    label_propagation,
     pagerank,
     path_from,
     topological_sort,
@@ -29,6 +31,7 @@ from .graph import Edge, Graph
 
 __all__ = [
     "ClusteringResult",
+    "CommunitiesResult",
     "CycleError",
     "Edge",
     "Graph",
@@ -48,6 +51,7 @@ __all__ = [
     "degree_centrality",
     "dfs",
     "dijkstra",
+    "label_propagation",
     "pagerank",
     "path_from",
     "topological_sort",

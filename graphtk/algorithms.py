@@ -1,4 +1,4 @@
-"""Graph algorithms: traversal, shortest paths, components, ordering, PageRank, centrality, clustering.
+"""Graph algorithms: traversal, shortest paths, components, ordering, PageRank, centrality, clustering, communities.
 
 Every function is deterministic (sorted iteration), reports unreachable nodes explicitly rather than
 inventing a distance, and raises a typed error with evidence when the input makes the answer
@@ -394,3 +394,89 @@ def clustering(graph: Graph) -> ClusteringResult:
     average = round(coefficient_sum / len(nodes), 10) if nodes else 0.0
     transitivity = round(3 * triangles / wedges, 10) if wedges else 0.0
     return ClusteringResult(coefficients, average, transitivity, triangles, wedges)
+
+
+@dataclass(frozen=True, slots=True)
+class CommunitiesResult:
+    communities: list[list[str]]
+    labels: dict[str, str]
+    iterations: int
+    converged: bool
+
+    @property
+    def count(self) -> int:
+        return len(self.communities)
+
+    def to_document(self) -> dict[str, object]:
+        return {
+            "communities": self.communities,
+            "labels": {node: self.labels[node] for node in sorted(self.labels)},
+            "count": self.count,
+            "iterations": self.iterations,
+            "converged": self.converged,
+        }
+
+
+def label_propagation(graph: Graph, *, max_iterations: int = 100) -> CommunitiesResult:
+    """Deterministic weighted label propagation over a simple undirected reading of the graph.
+
+    The reading ignores self-loops and sums arcs between the same pair: an undirected edge
+    contributes its weight once in each direction, and mutual arcs of a directed graph add up. Every
+    node starts labelled with its own name; each round walks nodes in name order and moves a node to
+    the neighbouring label with the highest summed edge weight, keeping the current label when it
+    ties for the best score and otherwise preferring the lexicographically smallest tied label. A
+    round with no change is convergence; hitting `max_iterations` first is reported honestly as
+    `converged=False` with the deterministic labelling reached so far. Communities are the groups
+    sharing a final label, each sorted by node name, the list ordered by each group's smallest node,
+    and every output label is normalised to that smallest member -- so isolated nodes stay singleton
+    communities and the document is byte-identical however the edges were ordered. Weights must be
+    non-negative: the first negative edge in the graph's stable edge order is refused with that edge
+    as evidence.
+    """
+    if isinstance(max_iterations, bool) or not isinstance(max_iterations, int) or max_iterations < 1:
+        raise ValidationError("max_iterations must be an integer >= 1", value=max_iterations)
+    for edge in graph.edges():
+        if edge.weight < 0:
+            raise NegativeWeightError(
+                "label propagation requires non-negative edge weights",
+                edge=f"{edge.source}->{edge.target}",
+                weight=edge.weight,
+            )
+    nodes = graph.nodes()
+    if not nodes:
+        return CommunitiesResult([], {}, 0, True)
+    adjacency: dict[str, dict[str, float]] = {node: {} for node in nodes}
+    for edge in graph.edges():
+        if edge.source == edge.target:
+            continue
+        adjacency[edge.source][edge.target] = adjacency[edge.source].get(edge.target, 0.0) + edge.weight
+        adjacency[edge.target][edge.source] = adjacency[edge.target].get(edge.source, 0.0) + edge.weight
+    labels = {node: node for node in nodes}
+    converged = False
+    iterations = 0
+    for iterations in range(1, max_iterations + 1):
+        changed = False
+        for node in nodes:
+            scores: dict[str, float] = {}
+            for neighbour in sorted(adjacency[node]):
+                label = labels[neighbour]
+                scores[label] = scores.get(label, 0.0) + adjacency[node][neighbour]
+            if not scores:
+                continue
+            best = max(scores.values())
+            tied = {label for label, score in scores.items() if score == best}
+            if labels[node] in tied:
+                continue
+            labels[node] = min(tied)
+            changed = True
+        if not changed:
+            converged = True
+            break
+    groups: dict[str, list[str]] = {}
+    for node in nodes:
+        groups.setdefault(labels[node], []).append(node)
+    # Members were appended in sorted node order, and lexicographic list ordering is then exactly
+    # "ordered by the smallest member", which is the required community order.
+    communities = sorted(groups.values())
+    normalised = {node: members[0] for members in communities for node in members}
+    return CommunitiesResult(communities, normalised, iterations, converged)

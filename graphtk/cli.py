@@ -24,6 +24,7 @@ from .algorithms import (
     degree_centrality,
     dfs,
     dijkstra,
+    label_propagation,
     pagerank,
     path_from,
     topological_sort,
@@ -135,6 +136,7 @@ def _command_describe(_: argparse.Namespace) -> int:
                 "bfs",
                 "centrality",
                 "clustering",
+                "communities",
                 "compare",
                 "components",
                 "describe",
@@ -248,6 +250,13 @@ def _command_clustering(args: argparse.Namespace) -> int:
     return EXIT_OK if graph.node_count else EXIT_NEGATIVE
 
 
+def _command_communities(args: argparse.Namespace) -> int:
+    graph = _graph_from(args)
+    result = label_propagation(graph, max_iterations=args.max_iterations)
+    _emit(result.to_document())
+    return EXIT_OK if result.converged else EXIT_NEGATIVE
+
+
 def _command_compare(args: argparse.Namespace) -> int:
     """Two independent shortest-path implementations over the same graph must agree exactly."""
     graph = _graph_from(args)
@@ -319,6 +328,10 @@ def build_parser() -> argparse.ArgumentParser:
     with_graph("centrality", "normalised degree centrality").set_defaults(handler=_command_centrality)
 
     with_graph("clustering", "local clustering coefficients, average and transitivity").set_defaults(handler=_command_clustering)
+
+    communities_command = with_graph("communities", "weighted label-propagation community detection")
+    communities_command.add_argument("--max-iterations", type=int, default=100, help="round cap; reaching it without converging exits 3")
+    communities_command.set_defaults(handler=_command_communities)
 
     compare_command = with_graph("compare", "run two shortest-path algorithms and check they agree")
     compare_command.add_argument("--source", required=True)

@@ -249,6 +249,15 @@ class Graph:
     def node_count(self) -> int:
         return len(self._adjacency)
 
+    @property
+    def revision(self) -> int:
+        """The mutation counter: bumped by every successful node/edge write, never by a storage switch.
+
+        Incremental sessions pin their snapshot to a revision, so a direct ``add_node`` /
+        ``add_edge`` / ``remove_edge`` on this graph is visible to them without any notification.
+        """
+        return self._revision
+
     def nodes(self) -> list[str]:
         if self._storage == "csr":
             self._ensure_storage()

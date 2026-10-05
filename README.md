@@ -120,13 +120,29 @@ reported distance always agrees with Dijkstra. The result carries `source`, `tar
   a quietly wrong answer. No insertion clears that state — not an edge between unrelated components,
   not an edge with a new node, and not re-adding the edge just removed — because one merge can never
   vouch for the whole graph; only `recompute()` rebuilds from the graph as it currently stands.
+* **Incremental shortest paths are honest too.** `IncrementalShortestPaths(graph, source)` opens with a
+  Bellman-Ford snapshot, so finite negative weights are allowed; an unknown source is a
+  `validation_error` and a reachable negative cycle is a `negative_cycle_error` carrying the same
+  evidence as a direct Bellman-Ford run. `distances()` returns a copy covering only reachable nodes;
+  `path_to(node)` returns a distance-consistent route, `[]` for a node that exists but is unreachable,
+  and a `validation_error` for an unknown node. Every successful write afterwards — through the
+  session's `add_edge` / `remove_edge` proxies or made directly on the graph — bumps the graph's
+  revision and marks the snapshot stale (a storage-backend switch bumps nothing); `distances()` and
+  `path_to()` then refuse with a `validation_error` carrying `stale: true`. `recompute()` rebuilds with
+  Bellman-Ford on the current graph, clears staleness and returns a deterministic differential
+  `{source, added, removed, changed}` — `added` maps nodes to new distances, `removed` to old
+  distances and `changed` to `{before, after}`, unchanged nodes absent and node order stable; the
+  baseline is always the last successful snapshot, so consecutive edits combine into one document. A
+  negative cycle found during `recompute()` keeps the old snapshot and the stale state until the graph
+  is repaired. Answers, paths, differentials and evidence are identical on adjacency, csr, dense and
+  auto.
 
 ## Layout
 
 ```
 graphtk/graph.py        graph, edges, CSR, degrees, diagnostics
 graphtk/algorithms.py   BFS/DFS, Dijkstra, A*, Bellman-Ford, components, topological sort, PageRank, centrality, clustering, label propagation
-graphtk/incremental.py  union-find components with staleness tracking
+graphtk/incremental.py  union-find components and the stale-aware Bellman-Ford shortest-path session
 graphtk/cli.py          fourteen subcommands and the exit-code contract
 tests/                  structure, traversal, shortest paths, ordering, ranking, clustering, communities, incremental behaviour
 ```

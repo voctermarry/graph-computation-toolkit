@@ -120,13 +120,23 @@ reported distance always agrees with Dijkstra. The result carries `source`, `tar
   a quietly wrong answer. No insertion clears that state — not an edge between unrelated components,
   not an edge with a new node, and not re-adding the edge just removed — because one merge can never
   vouch for the whole graph; only `recompute()` rebuilds from the graph as it currently stands.
+* **Incremental shortest paths are honest too.** `IncrementalShortestPaths(graph, source)` snapshots
+  Bellman-Ford (negative edges allowed, reachable negative cycles reported with their evidence) and
+  then watches the graph's revision counter: any successful structural or weight write — through the
+  session's `add_edge`/`remove_edge` proxies or directly on the `Graph` — makes the snapshot stale,
+  while a storage-backend switch, a removal that found nothing, or a rejected write does not. A stale
+  session refuses `distances`/`path_to` with a `ValidationError` carrying `stale: true` rather than
+  serving an outdated answer. `recompute()` re-runs Bellman-Ford on the current graph, clears the
+  staleness, and returns a deterministic diff (`source`, `added`, `removed`, `changed`) against the
+  last *successful* snapshot; a negative cycle met during recompute keeps that snapshot and the stale
+  flag, so a repaired graph can simply be recomputed again.
 
 ## Layout
 
 ```
 graphtk/graph.py        graph, edges, CSR, degrees, diagnostics
 graphtk/algorithms.py   BFS/DFS, Dijkstra, A*, Bellman-Ford, components, topological sort, PageRank, centrality, clustering, label propagation
-graphtk/incremental.py  union-find components with staleness tracking
+graphtk/incremental.py  union-find components and single-source shortest paths, both with staleness tracking
 graphtk/cli.py          fourteen subcommands and the exit-code contract
 tests/                  structure, traversal, shortest paths, ordering, ranking, clustering, communities, incremental behaviour
 ```

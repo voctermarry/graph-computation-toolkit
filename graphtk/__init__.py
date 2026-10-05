@@ -28,6 +28,7 @@ from .errors import (
     ValidationError,
 )
 from .graph import Edge, Graph
+from .incremental import IncrementalShortestPaths
 
 __all__ = [
     "ClusteringResult",
@@ -37,6 +38,7 @@ __all__ = [
     "Graph",
     "GraphError",
     "INFINITY",
+    "IncrementalShortestPaths",
     "NegativeCycleError",
     "NegativeWeightError",
     "OutputError",

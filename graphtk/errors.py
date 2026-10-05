@@ -40,7 +40,7 @@ class ValidationError(GraphError):
 
 
 class NegativeWeightError(GraphError):
-    """Dijkstra was asked for shortest paths over a graph with a negative edge."""
+    """An algorithm defined only for non-negative edges (Dijkstra, A*, PageRank) met a negative one."""
 
     kind = "negative_weight_error"
 

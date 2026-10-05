@@ -131,6 +131,51 @@ class CLITests(unittest.TestCase):
         self.assertTrue(document["converged"])
         self.assertAlmostEqual(sum(document["scores"].values()), 1.0, places=6)
 
+    def test_pagerank_negative_weight_is_an_error_document(self) -> None:
+        negative = self.write_edges(
+            [{"source": "a", "target": "b", "weight": 1}, {"source": "b", "target": "c", "weight": -2}]
+        )
+        code, out, err = run_cli(["pagerank", "--edges", negative, "--directed"])
+        self.assertEqual(code, EXIT_ERROR)
+        self.assertEqual(out, "")  # no partial result on stdout
+        document = json.loads(err)  # a single strict-JSON error document on stderr
+        self.assertEqual(
+            document,
+            {
+                "error": "negative_weight_error",
+                "message": "pagerank requires non-negative edge weights",
+                "edge": "b->c",
+                "weight": -2.0,
+            },
+        )
+        self.assertEqual(err.count("\n"), 1)
+
+    def test_pagerank_negative_edge_in_an_isolated_component_is_still_rejected(self) -> None:
+        # A positive component plus a disconnected negative edge: the whole graph feeds PageRank.
+        split = self.write_edges(
+            [
+                {"source": "a", "target": "b", "weight": 1},
+                {"source": "x", "target": "y", "weight": -1},
+            ]
+        )
+        code, out, err = run_cli(["pagerank", "--edges", split, "--directed"])
+        self.assertEqual((code, out), (EXIT_ERROR, ""))
+        self.assertEqual(json.loads(err)["edge"], "x->y")
+
+    def test_pagerank_undirected_negative_edge_reports_the_canonical_direction(self) -> None:
+        negative = self.write_edges([{"source": "z", "target": "a", "weight": -3}])
+        code, _, err = run_cli(["pagerank", "--edges", negative])
+        self.assertEqual(code, EXIT_ERROR)
+        self.assertEqual(json.loads(err)["edge"], "a->z")
+
+    def test_pagerank_accepts_zero_weights_and_treats_zero_totals_as_dangling(self) -> None:
+        zero = self.write_edges([{"source": "a", "target": "b", "weight": 0}])
+        code, out, err = run_cli(["pagerank", "--edges", zero, "--directed"])
+        self.assertEqual((code, err), (EXIT_OK, ""))
+        document = json.loads(out)
+        self.assertTrue(document["converged"])
+        self.assertAlmostEqual(sum(document["scores"].values()), 1.0, places=6)
+
     def test_centrality_is_normalised(self) -> None:
         code, out, _ = run_cli(["centrality", "--edges", self.edges])
         self.assertEqual(code, EXIT_OK)

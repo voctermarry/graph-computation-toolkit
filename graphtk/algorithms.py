@@ -276,9 +276,23 @@ class PageRankResult:
 
 
 def pagerank(graph: Graph, *, damping: float = 0.85, tolerance: float = 1e-9, max_iterations: int = 200) -> PageRankResult:
-    """Power iteration with explicit convergence reporting (never a silent iteration cap)."""
+    """Power iteration with explicit convergence reporting (never a silent iteration cap).
+
+    Edge weights are transition shares, so a negative one would yield negative scores, a zero
+    outgoing-weight sum that divides through to nonsense, or a total that is not one. The whole
+    graph participates in the redistribution -- an edge in an isolated component is not exempt -- so
+    every edge is checked up front in the graph's stable edge order and a negative weight is refused
+    with that edge as evidence; a zero total is fine, it simply marks a dangling node.
+    """
     if not 0.0 < damping < 1.0:
         raise ValidationError("damping must be in (0, 1)", value=damping)
+    for edge in graph.edges():
+        if edge.weight < 0:
+            raise NegativeWeightError(
+                "pagerank requires non-negative edge weights",
+                edge=f"{edge.source}->{edge.target}",
+                weight=edge.weight,
+            )
     nodes = graph.nodes()
     if not nodes:
         return PageRankResult({}, 0, True)

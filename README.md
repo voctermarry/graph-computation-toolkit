@@ -60,9 +60,11 @@ reported distance always agrees with Dijkstra. The result carries `source`, `tar
   cannot reach; no `-1`, no `inf` standing in for "unknown".
 * **A path is consistent with its distance.** `path_from` reconstructs the route, and the test suite
   re-walks it to check the edge weights add up to the reported distance.
-* **Refusals carry evidence.** Dijkstra over a negative edge raises `negative_weight_error` naming the
-  edge; Bellman-Ford on a negative cycle raises `negative_cycle_error`; a cyclic graph under `toposort`
-  raises `cycle_error` with the nodes that could never be released.
+* **Refusals carry evidence.** Dijkstra, A* and PageRank over a negative edge raise
+  `negative_weight_error` naming the edge and its weight — PageRank treats weights as transition
+  shares, so it reports the first negative edge in the graph's stable edge order even when that edge
+  sits in an isolated component; Bellman-Ford on a negative cycle raises `negative_cycle_error`; a
+  cyclic graph under `toposort` raises `cycle_error` with the nodes that could never be released.
 * **Two implementations must agree.** `compare` is the guarantee: Dijkstra and Bellman-Ford are
   independent code paths, and the command reports `identical`, the node count compared, both reachable
   counts, and every differing node — exiting **3** when they disagree.

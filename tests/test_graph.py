@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import unittest
 
 from graphtk import (
@@ -271,6 +272,89 @@ class RankingTests(unittest.TestCase):
     def test_pagerank_rejects_out_of_range_damping(self) -> None:
         with self.assertRaises(ValidationError):
             pagerank(sample(), damping=1.0)
+
+    def test_pagerank_refuses_a_negative_weight_before_iterating(self) -> None:
+        graph = Graph(directed=True)
+        graph.add_edge("a", "b", 1.0)
+        graph.add_edge("b", "c", -2.0)
+        with self.assertRaises(NegativeWeightError) as caught:
+            pagerank(graph)
+        document = caught.exception.to_document()
+        self.assertEqual(document["error"], "negative_weight_error")
+        self.assertEqual(document["edge"], "b->c")
+        self.assertEqual(document["weight"], -2.0)
+
+    def test_pagerank_reports_the_first_negative_edge_in_stable_edge_order(self) -> None:
+        rows = [("d", "d", -9), ("a", "z", -1), ("m", "n", -4), ("a", "b", 2), ("b", "c", 3)]
+
+        def document_for(order: list[int]) -> dict:
+            graph = Graph(directed=True)
+            for index in order:
+                graph.add_edge(*rows[index])
+            with self.assertRaises(NegativeWeightError) as caught:
+                pagerank(graph)
+            return caught.exception.to_document()
+
+        orders = [list(range(len(rows))), list(reversed(range(len(rows)))), [2, 0, 4, 1, 3]]
+        documents = [document_for(order) for order in orders]
+        self.assertTrue(all(document == documents[0] for document in documents))
+        # Sorted by (source, target): a->z precedes d->d and m->n regardless of insertion order.
+        self.assertEqual(documents[0]["edge"], "a->z")
+        self.assertEqual(documents[0]["weight"], -1.0)
+
+    def test_pagerank_undirected_negative_edge_uses_the_canonical_direction(self) -> None:
+        graph = Graph(directed=False)
+        graph.add_edge("z", "a", -3.0)  # stored on both halves, reported once as a->z
+        with self.assertRaises(NegativeWeightError) as caught:
+            pagerank(graph)
+        self.assertEqual(caught.exception.context["edge"], "a->z")
+        self.assertEqual(caught.exception.context["weight"], -3.0)
+
+    def test_pagerank_refuses_a_negative_edge_even_in_an_isolated_component(self) -> None:
+        graph = Graph(directed=True)
+        graph.add_edge("a", "b")
+        graph.add_edge("b", "a")
+        graph.add_edge("x", "y", -1.0)  # separate component: PageRank is computed over the whole graph
+        with self.assertRaises(NegativeWeightError) as caught:
+            pagerank(graph)
+        self.assertEqual(caught.exception.context["edge"], "x->y")
+
+    def test_pagerank_negative_self_loop_is_an_error(self) -> None:
+        graph = Graph(directed=True)
+        graph.add_edge("a", "a", -0.5)
+        with self.assertRaises(NegativeWeightError) as caught:
+            pagerank(graph)
+        self.assertEqual(caught.exception.context["edge"], "a->a")
+
+    def test_pagerank_zero_outgoing_weight_is_a_dangling_node_not_an_error(self) -> None:
+        # Every outgoing arc here carries weight 0: the total outgoing weight is 0, which must read
+        # as a dangling node (mass redistributed), never as the negative-weight refusal.
+        graph = Graph(directed=True)
+        graph.add_edge("a", "b", 0.0)
+        graph.add_edge("b", "a", 0.0)
+        graph.add_node("c")
+        result = pagerank(graph)
+        self.assertTrue(result.converged)
+        self.assertTrue(all(math.isfinite(score) and score >= 0.0 for score in result.scores.values()))
+        self.assertAlmostEqual(sum(result.scores.values()), 1.0, places=9)
+
+    def test_pagerank_mixed_zero_and_positive_weights_still_converges_to_one(self) -> None:
+        graph = Graph(directed=True)
+        graph.add_edge("a", "b", 5.0)
+        graph.add_edge("b", "c", 0.0)
+        graph.add_edge("c", "a", 2.0)
+        graph.add_edge("a", "a", 0.0)  # zero-weight self loop
+        result = pagerank(graph)
+        self.assertTrue(result.converged)
+        self.assertTrue(all(math.isfinite(score) and score >= 0.0 for score in result.scores.values()))
+        self.assertAlmostEqual(sum(result.scores.values()), 1.0, places=9)
+
+    def test_pagerank_empty_graph_is_still_the_converged_empty_result(self) -> None:
+        result = pagerank(Graph(directed=True))
+        self.assertEqual(result.scores, {})
+        self.assertEqual(result.iterations, 0)
+        self.assertTrue(result.converged)
+        self.assertEqual(result.to_document(), {"iterations": 0, "converged": True, "scores": {}})
 
     def test_degree_centrality_is_normalised(self) -> None:
         centrality = degree_centrality(sample())

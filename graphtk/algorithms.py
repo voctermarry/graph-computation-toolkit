@@ -276,9 +276,23 @@ class PageRankResult:
 
 
 def pagerank(graph: Graph, *, damping: float = 0.85, tolerance: float = 1e-9, max_iterations: int = 200) -> PageRankResult:
-    """Power iteration with explicit convergence reporting (never a silent iteration cap)."""
+    """Power iteration with explicit convergence reporting (never a silent iteration cap).
+
+    Weights are read as transition shares, so a negative edge would make the scores meaningless
+    (negative shares, cancelled divisors, a total that no longer stays at one). Like Dijkstra, the
+    whole edge list is checked up front -- even a negative edge in a disconnected corner poisons the
+    global dangling-mass redistribution -- and the first one in the graph's stable edge order is
+    reported as evidence.
+    """
     if not 0.0 < damping < 1.0:
         raise ValidationError("damping must be in (0, 1)", value=damping)
+    for edge in graph.edges():
+        if edge.weight < 0:
+            raise NegativeWeightError(
+                "pagerank requires non-negative weights; use bellman_ford for signed graphs",
+                edge=f"{edge.source}->{edge.target}",
+                weight=edge.weight,
+            )
     nodes = graph.nodes()
     if not nodes:
         return PageRankResult({}, 0, True)

@@ -29,6 +29,35 @@ the algorithms that support it. Unknown fields are rejected, and every parse err
 
 Graphs are **undirected unless `--directed` is passed**.
 
+## Storage backends
+
+Every command that reads an edge file accepts `--storage adjacency|csr|dense|auto` (default
+`adjacency`, which keeps the historical behaviour exactly):
+
+* `adjacency` — the legacy dict-of-dicts adjacency lists;
+* `csr` — compressed sparse row: sorted nodes, row offsets, flat target/weight arrays;
+* `dense` — an n×n weight matrix plus an n×n presence bitmask, so a zero-weight edge stays
+  distinct from no edge;
+* `auto` — after the graph is fully loaded, pick whichever of CSR and dense has the smaller
+  **logical footprint** (ties, empty graphs and an over-limit dense all resolve to `csr`).
+
+The backend is real storage, not a report label: `neighbors`, `edges`, `degree` and every
+algorithm read through it, results are identical on all three, and the graph stays mutable —
+`add_node`, `add_edge` and `remove_edge` take effect immediately on any backend.
+
+The accounting is deterministic. With `n` nodes and `a` adjacency entries (a directed arc counts
+once, an undirected non-self-loop edge twice — once per endpoint — a self-loop once):
+**CSR = 8·(n+1) + 16·a bytes**, **dense = 9·n² bytes** (8-byte weight + 1-byte presence flag per
+cell). An explicit `dense` request whose footprint exceeds **536870912 bytes** is refused before
+anything is allocated, with a `validation_error` carrying `requestedBytes` and `limitBytes`
+(exit 2); `auto` simply takes CSR in that situation. An unknown `--storage` value is also a
+`validation_error` with exit 2.
+
+When `--storage` is passed explicitly, `stats` adds a `storage` object to its document:
+`requested`, `selected`, `logicalBytes` (the selected backend's footprint), `csrBytes`,
+`denseBytes`, `adjacencyEntries`, and `density` (`a/(n²)`, `0` when the graph is empty). No other
+command's output changes.
+
 ## Commands
 
 | Command | Purpose | Exit codes |
@@ -95,7 +124,7 @@ reported distance always agrees with Dijkstra. The result carries `source`, `tar
 ## Layout
 
 ```
-graphtk/graph.py        graph, edges, CSR, degrees, diagnostics
+graphtk/graph.py        graph, edges, storage backends (adjacency/CSR/dense), CSR export, degrees, diagnostics
 graphtk/algorithms.py   BFS/DFS, Dijkstra, A*, Bellman-Ford, components, topological sort, PageRank, centrality, clustering, label propagation
 graphtk/incremental.py  union-find components with staleness tracking
 graphtk/cli.py          fourteen subcommands and the exit-code contract

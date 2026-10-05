@@ -30,7 +30,7 @@ from .algorithms import (
     topological_sort,
 )
 from .errors import GraphError, ParseError, ValidationError
-from .graph import Edge, Graph
+from .graph import STORAGE_KINDS, Edge, Graph, csr_logical_bytes, dense_logical_bytes, select_storage
 
 EXIT_OK = 0
 EXIT_ERROR = 2
@@ -155,14 +155,50 @@ def _command_describe(_: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _load_graph(args: argparse.Namespace) -> tuple[Graph, dict[str, Any] | None]:
+    """Read the edge list, then move the graph onto the requested storage backend.
+
+    The storage kind is validated before any file is touched so an unknown value is always the
+    reported error. ``auto`` (and the dense limit) are decided only after the graph is fully
+    loaded, because the formulas need the final node and adjacency-entry counts. The second
+    return value is the ``storage`` report ``stats`` adds to its document -- but only when
+    ``--storage`` was passed explicitly; every other command leaves its output untouched.
+    """
+    requested = args.storage if args.storage is not None else "adjacency"
+    if requested not in STORAGE_KINDS:
+        raise ValidationError(f"unknown storage: {requested}", value=requested, known=list(STORAGE_KINDS))
+    graph = _read_edges(args.edges, args.directed)
+    nodes = graph.node_count
+    entries = graph.adjacency_entry_count()
+    selected = select_storage(requested, nodes, entries)
+    if selected != graph.storage:
+        graph = graph.to_storage(selected)
+    document = None
+    if args.storage is not None:
+        csr_bytes = csr_logical_bytes(nodes, entries)
+        dense_bytes = dense_logical_bytes(nodes)
+        document = {
+            "requested": requested,
+            "selected": selected,
+            "logicalBytes": dense_bytes if selected == "dense" else csr_bytes,
+            "csrBytes": csr_bytes,
+            "denseBytes": dense_bytes,
+            "adjacencyEntries": entries,
+            "density": 0 if nodes == 0 else round(entries / (nodes * nodes), 10),
+        }
+    return graph, document
+
+
 def _graph_from(args: argparse.Namespace) -> Graph:
-    return _read_edges(args.edges, args.directed)
+    return _load_graph(args)[0]
 
 
 def _command_stats(args: argparse.Namespace) -> int:
-    graph = _graph_from(args)
+    graph, storage = _load_graph(args)
     document = graph.to_document()
     document["components"] = len(components(graph))
+    if storage is not None:
+        document["storage"] = storage
     _emit(document)
     return EXIT_OK if graph.node_count else EXIT_NEGATIVE
 
@@ -293,6 +329,9 @@ def build_parser() -> argparse.ArgumentParser:
         sub = subparsers.add_parser(name, help=help_text)
         sub.add_argument("--edges", required=True, help="JSONL edges, or - for stdin")
         sub.add_argument("--directed", action="store_true", help="treat edges as one-way")
+        # No argparse choices: an unknown kind must come back as the JSON validation_error
+        # document with exit code 2, not as an argparse usage message.
+        sub.add_argument("--storage", metavar="KIND", help="storage backend: adjacency (default), csr, dense, or auto")
         return sub
 
     with_graph("stats", "graph counters").set_defaults(handler=_command_stats)

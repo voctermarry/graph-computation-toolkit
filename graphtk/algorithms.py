@@ -1,4 +1,5 @@
-"""Graph algorithms: traversal, shortest paths, components, ordering, PageRank, centrality, clustering.
+"""Graph algorithms: traversal, shortest paths, components, ordering, PageRank, centrality, clustering
+and community detection.
 
 Every function is deterministic (sorted iteration), reports unreachable nodes explicitly rather than
 inventing a distance, and raises a typed error with evidence when the input makes the answer
@@ -394,3 +395,94 @@ def clustering(graph: Graph) -> ClusteringResult:
     average = round(coefficient_sum / len(nodes), 10) if nodes else 0.0
     transitivity = round(3 * triangles / wedges, 10) if wedges else 0.0
     return ClusteringResult(coefficients, average, transitivity, triangles, wedges)
+
+
+@dataclass(frozen=True, slots=True)
+class CommunityResult:
+    communities: list[list[str]]
+    labels: dict[str, str]
+    count: int
+    iterations: int
+    converged: bool
+
+    def to_document(self) -> dict[str, object]:
+        return {
+            "communities": self.communities,
+            "labels": {node: self.labels[node] for node in sorted(self.labels)},
+            "count": self.count,
+            "iterations": self.iterations,
+            "converged": self.converged,
+        }
+
+
+def label_propagation(graph: Graph, *, max_iterations: int = 100) -> CommunityResult:
+    """Deterministic weighted label propagation on a simple undirected reading of the graph.
+
+    Every node starts with its own label. A round visits the nodes in name order and gives each node
+    the neighbour label carrying the greatest summed incident edge weight; a tie keeps the node's
+    current label when it is itself tied for the maximum, and otherwise takes the lexicographically
+    smallest tied label. A round without a single change ends the run. Labels then only travel along
+    edges, so grouping by the final label never merges disconnected nodes; each group is reported
+    under the smallest member name.
+
+    The view is weak/undirected: a directed arc binds both endpoints at its weight, and when both
+    directions exist their weights add; self-loops bind nobody. Weights must be non-negative (a
+    negative pull would make "strongest label" meaningless) and the first offending edge is reported
+    in the graph's stable edge order. Reaching the iteration cap with labels still moving is a
+    result, not an error: ``converged`` is False and the labels as they stand are returned.
+    """
+    # Mirror the parameter rule pagerank uses: validate the request before scanning the graph.
+    if isinstance(max_iterations, bool) or not isinstance(max_iterations, int) or max_iterations < 1:
+        raise ValidationError("max_iterations must be an integer not less than 1", value=max_iterations)
+    for edge in graph.edges():
+        if edge.weight < 0:
+            raise NegativeWeightError(
+                "label propagation requires non-negative edge weights",
+                edge=f"{edge.source}->{edge.target}",
+                weight=edge.weight,
+            )
+    nodes = graph.nodes()
+    if not nodes:
+        return CommunityResult([], {}, 0, 0, True)
+    # Seed every node, including isolated ones: an undirected adjacency built only from edges could
+    # not recover a node whose only row is a self-loop or which was added via add_node. Both directed
+    # arcs of a mutual pair land in the same two cells, so their weights add; a single arc is mirrored
+    # onto both endpoints, which is exactly the weak reading.
+    weighted: dict[str, dict[str, float]] = {node: {} for node in nodes}
+    for edge in graph.edges():
+        if edge.source == edge.target:
+            continue
+        weighted[edge.source][edge.target] = weighted[edge.source].get(edge.target, 0.0) + edge.weight
+        weighted[edge.target][edge.source] = weighted[edge.target].get(edge.source, 0.0) + edge.weight
+    labels = {node: node for node in nodes}
+    converged = False
+    iterations = 0
+    for iterations in range(1, max_iterations + 1):
+        changed = False
+        for node in nodes:
+            scores: dict[str, float] = {}
+            for neighbour in sorted(weighted[node]):
+                label = labels[neighbour]
+                scores[label] = scores.get(label, 0.0) + weighted[node][neighbour]
+            if not scores:
+                continue  # an isolated node has no candidate labels and keeps its own singleton
+            best = max(scores.values())
+            tied = {label for label, score in scores.items() if score == best}
+            chosen = labels[node] if labels[node] in tied else min(tied)
+            if chosen != labels[node]:
+                labels[node] = chosen
+                changed = True
+        if not changed:
+            converged = True
+            break
+    # Regroup under each final label, then normalise the label itself to the smallest member name.
+    groups: dict[str, list[str]] = {}
+    for node in nodes:
+        groups.setdefault(labels[node], []).append(node)
+    communities = sorted(groups.values(), key=min)
+    normalised: dict[str, str] = {}
+    for members in communities:
+        canonical = members[0]  # members were appended in sorted node order
+        for node in members:
+            normalised[node] = canonical
+    return CommunityResult(communities, normalised, len(communities), iterations, converged)

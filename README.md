@@ -1,7 +1,7 @@
 # graph-computation-toolkit
 
-Graph construction, traversal, shortest paths, components, ordering, ranking, clustering and
-incremental components (Python standard library only).
+Graph construction, traversal, shortest paths, components, ordering, ranking, clustering, community
+detection and incremental components (Python standard library only).
 
 ## Install and entry point
 
@@ -40,6 +40,7 @@ Graphs are **undirected unless `--directed` is passed**.
 | `astar --source S --target T --heuristic FILE` | goal-directed shortest path guided by a consistent heuristic JSON object | 0 / 2 |
 | `bellman-ford --source S [--target T]` | shortest paths with negative weights | 0 / **3** / 2 |
 | `components` | weakly connected components, each sorted | 0 / **3** / 2 |
+| `communities [--max-iterations N]` | deterministic weighted label-propagation communities | 0 / **3** (cap reached) / 2 |
 | `toposort` | topological order (**requires `--directed`**) | 0 / 2 |
 | `pagerank [--damping] [--tolerance]` | power iteration with explicit convergence reporting | 0 / **3** (not converged) / 2 |
 | `centrality` | normalised degree centrality | 0 / **3** / 2 |
@@ -74,6 +75,19 @@ reported distance always agrees with Dijkstra. The result carries `source`, `tar
   zero), and the triangle and connected-triple counts. An edge in either direction counts once, mutual
   arcs and duplicate input still make a single adjacency, weights are ignored, and a self-loop is never
   a neighbour or a triangle edge — so the document is identical for the same edges in any order.
+* **Communities are found by deterministic weighted label propagation.** `label_propagation` (the
+  `communities` command) reads a simple undirected view — self-loops ignored, a directed arc binding
+  both endpoints and a pair of opposing arcs having their weights added — and every node starts with
+  its own label. Nodes are updated in name order; a node adopts the neighbour label with the greatest
+  summed edge weight, keeping its current label on a tie it belongs to and otherwise taking the
+  lexicographically smallest tied label. A round without a change ends the run; groups are then
+  reported sorted by their smallest member, each member sorted, with the output label normalised to
+  the group's smallest node — so the same graph yields byte-identical output regardless of edge input
+  order. Isolated nodes stay singleton communities; the empty graph returns empty `communities` and
+  `labels`, `count` and `iterations` 0 and `converged` true. A negative edge raises
+  `negative_weight_error` naming the first offending edge in stable edge order, and a non-integer or
+  below-one `--max-iterations` is a validation error. When the cap is reached with labels still
+  moving, the deterministic result is written with `converged` false and the command exits **3**.
 * **Incremental labelling is honest.** `IncrementalComponents` merges components on insertion in
   near-constant time; a **removal** cannot be undone by union-find, so the structure marks itself stale,
   names the affected nodes, and makes `labels()` fail until `recompute()` is called instead of returning
@@ -85,8 +99,8 @@ reported distance always agrees with Dijkstra. The result carries `source`, `tar
 
 ```
 graphtk/graph.py        graph, edges, CSR, degrees, diagnostics
-graphtk/algorithms.py   BFS/DFS, Dijkstra, A*, Bellman-Ford, components, topological sort, PageRank, centrality, clustering
+graphtk/algorithms.py   BFS/DFS, Dijkstra, A*, Bellman-Ford, components, topological sort, PageRank, centrality, clustering, label propagation
 graphtk/incremental.py  union-find components with staleness tracking
-graphtk/cli.py          thirteen subcommands and the exit-code contract
+graphtk/cli.py          fourteen subcommands and the exit-code contract
 tests/                  structure, traversal, shortest paths, ordering, ranking, clustering, incremental behaviour
 ```

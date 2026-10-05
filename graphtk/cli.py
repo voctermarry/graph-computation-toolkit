@@ -24,6 +24,7 @@ from .algorithms import (
     degree_centrality,
     dfs,
     dijkstra,
+    label_propagation,
     pagerank,
     path_from,
     topological_sort,
@@ -136,6 +137,7 @@ def _command_describe(_: argparse.Namespace) -> int:
                 "centrality",
                 "clustering",
                 "compare",
+                "communities",
                 "components",
                 "describe",
                 "dijkstra",
@@ -216,6 +218,15 @@ def _command_components(args: argparse.Namespace) -> int:
     groups = components(graph)
     _emit({"components": groups, "count": len(groups)})
     return EXIT_OK if groups else EXIT_NEGATIVE
+
+
+def _command_communities(args: argparse.Namespace) -> int:
+    graph = _graph_from(args)
+    result = label_propagation(graph, max_iterations=args.max_iterations)
+    _emit(result.to_document())
+    # A run that spent every round without settling still produced the deterministic answer asked
+    # for; the cap is a negative verdict (3), never the input-error document of code 2.
+    return EXIT_OK if result.converged else EXIT_NEGATIVE
 
 
 def _command_toposort(args: argparse.Namespace) -> int:
@@ -309,6 +320,11 @@ def build_parser() -> argparse.ArgumentParser:
     bellman_command.set_defaults(handler=_command_bellman_ford)
 
     with_graph("components", "weakly connected components").set_defaults(handler=_command_components)
+
+    communities_command = with_graph("communities", "weighted label-propagation communities")
+    communities_command.add_argument("--max-iterations", type=int, default=100)
+    communities_command.set_defaults(handler=_command_communities)
+
     with_graph("toposort", "topological order (needs --directed)").set_defaults(handler=_command_toposort)
 
     pagerank_command = with_graph("pagerank", "power-iteration PageRank")

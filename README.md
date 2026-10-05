@@ -29,6 +29,35 @@ the algorithms that support it. Unknown fields are rejected, and every parse err
 
 Graphs are **undirected unless `--directed` is passed**.
 
+## Storage backends
+
+Every command that reads an edge file accepts `--storage adjacency|csr|dense|auto`. Without the flag
+the graph stays on the mutable adjacency dict, and outputs, exit codes, ordering and error documents
+are unchanged.
+
+* `csr` — queries and algorithms read compressed-sparse-row arrays: an 8-byte offset per node
+  boundary and a flattened 16-byte `(node id, weight)` neighbour list.
+* `dense` — queries and algorithms read an `n×n` presence byte alongside an `n×n` float64 weight
+  matrix (9 bytes per cell). The presence byte is what keeps a **zero-weight edge distinct from a
+  pair that has no edge**.
+* `auto` — after the full load, picks the smaller of the two logical footprints; CSR wins ties and
+  is always chosen for an empty graph. An oversized dense candidate silently falls back to CSR.
+
+The formulas are reproducible: with `n` nodes and `a` adjacency entries (each directed arc once, an
+undirected non-self-loop edge twice, a self-loop once), CSR is `8·(n+1) + 16·a` bytes and dense is
+`9·n²`. An explicit `--storage dense` over **536,870,912 bytes** is refused before allocation as a
+`validation_error` carrying `requestedBytes` and `limitBytes`, with exit code 2; an unknown storage
+value is the same kind of error. The switched graph remains fully mutable — `add_node`, `add_edge`
+and `remove_edge` rebuild the arrays lazily, and subsequent queries and algorithms reflect them
+immediately.
+
+Only `stats` gains output when the flag is passed: a `storage` object with `requested`, `selected`,
+`logicalBytes`, `csrBytes`, `denseBytes`, `adjacencyEntries` and `density` (`a/n²`, rounded to ten
+decimals; `0` for an empty graph). Every other command keeps exactly the same fields, and the
+reachable sets, distances, paths, traversal orders, rankings, communities, clustering values and
+error evidence are identical on all three backends; `compare` still cross-checks only the two
+shortest-path algorithms.
+
 ## Commands
 
 | Command | Purpose | Exit codes |

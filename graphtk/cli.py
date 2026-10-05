@@ -30,7 +30,7 @@ from .algorithms import (
     topological_sort,
 )
 from .errors import GraphError, ParseError, ValidationError
-from .graph import Edge, Graph
+from .graph import STORAGE_CHOICES, Edge, Graph
 
 EXIT_OK = 0
 EXIT_ERROR = 2
@@ -156,13 +156,25 @@ def _command_describe(_: argparse.Namespace) -> int:
 
 
 def _graph_from(args: argparse.Namespace) -> Graph:
-    return _read_edges(args.edges, args.directed)
+    requested = args.storage
+    # Validate the storage name before touching the edge file, so an unknown backend is always the
+    # same JSON validation_error (exit 2) whether or not the input also happens to be broken.
+    # Formula-driven refusals -- dense over the allocation limit -- still happen after the load.
+    if requested is not None and requested not in STORAGE_CHOICES:
+        raise ValidationError(f"storage must be one of {', '.join(STORAGE_CHOICES)}", value=requested)
+    graph = _read_edges(args.edges, args.directed)
+    # No --storage flag: stay on the mutable adjacency backend exactly as before.
+    if requested is not None:
+        graph.configure_storage(requested)
+    return graph
 
 
 def _command_stats(args: argparse.Namespace) -> int:
     graph = _graph_from(args)
     document = graph.to_document()
     document["components"] = len(components(graph))
+    if args.storage is not None:
+        document["storage"] = graph.storage_document()
     _emit(document)
     return EXIT_OK if graph.node_count else EXIT_NEGATIVE
 
@@ -293,6 +305,11 @@ def build_parser() -> argparse.ArgumentParser:
         sub = subparsers.add_parser(name, help=help_text)
         sub.add_argument("--edges", required=True, help="JSONL edges, or - for stdin")
         sub.add_argument("--directed", action="store_true", help="treat edges as one-way")
+        sub.add_argument(
+            "--storage",
+            default=None,
+            help="read backend: adjacency (default), csr, dense, or auto (smaller logical footprint)",
+        )
         return sub
 
     with_graph("stats", "graph counters").set_defaults(handler=_command_stats)
